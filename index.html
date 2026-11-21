@@ -189,11 +189,8 @@
     <section class="card">
       <div class="card-title"><span class="ti" data-icon="bus" data-size="16"></span>Buses Montevideo</div>
       <div class="status" id="busStatus">Apagado</div>
-      <div class="row">
-        <button class="btn" id="refreshBus"><span data-icon="refresh-cw" data-size="16"></span>Actualizar</button>
-        <select id="busInterval" title="Actualización automática"></select>
-      </div>
-      <div class="hint">Con cámara: CUTCSA, COETC, COME y UCOT. Los demás buses se ven en gris y solo con "Todos los buses".</div>
+      <div class="hint" id="busCountdown"></div>
+      <div class="hint">Se actualiza cada 10 s solo mientras esta pestaña está visible, y se apaga sola a los 40 s para cuidar la cuota. Con cámara: CUTCSA, COETC, COME y UCOT; los demás se ven en gris con "Todos los buses".</div>
     </section>
 
     <section class="card">
@@ -203,9 +200,6 @@
         <button class="btn" id="refreshKml"><span data-icon="refresh-cw" data-size="16"></span>Actualizar</button>
         <select id="kmlInterval" title="Actualización automática"></select>
       </div>
-      <label class="btn secondary mt" for="kmlFile" style="margin-bottom:0"><span data-icon="upload" data-size="16"></span>Cargar KML/KMZ
-        <input type="file" id="kmlFile" accept=".kml,.kmz"></label>
-      <button class="btn secondary mt" id="copyNames" title="Copia los nombres de las cámaras visibles (respeta la búsqueda y las capas)"><span data-icon="copy" data-size="16"></span>Copiar nombres visibles</button>
       <div id="kmlLayers" class="mt"></div>
     </section>
 
@@ -338,7 +332,7 @@ const STORAGE_KEY = "mapa-cctv-waze-v1";
 function loadSettings() {
   const fresh = { sources: { ...DEFAULT_SOURCES }, layers: {}, hiddenAlertTypes: [], baseMap: "OpenStreetMap",
                   kmlInterval: "60", wazeInterval: "60", view: null, maxAgeHours: 0, minReliability: 0,
-                  showSource: { kml: true, waze: true }, showBuses: { all: false, camera: true }, busInterval: "20", watch: { accident: true, stopped: true }, notifySound: false, notifyBrowser: false, historySeeded: false };
+                  showSource: { kml: true, waze: true }, showBuses: { all: false, camera: false }, watch: { accident: true, stopped: true }, notifySound: false, notifyBrowser: false, historySeeded: false };
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     if (saved) return { ...fresh, ...saved, sources: { ...fresh.sources, ...saved.sources } };
@@ -346,6 +340,7 @@ function loadSettings() {
   return fresh;
 }
 const settings = loadSettings();
+settings.showBuses = { all: false, camera: false };   // buses always start off: they are switched on deliberately and expire
 function saveSettings() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch (error) { /* ignore */ }
 }
@@ -404,7 +399,7 @@ function kmlColorToCss(kmlColor) {
 function setStatus(id, message, isError) {
   const node = el(id); node.textContent = message;
   node.classList.toggle("err", !!isError);
-  node.classList.toggle("ok", !isError && !message.startsWith("Cargando") && message !== "Sin datos" && message !== "Apagado");
+  node.classList.toggle("ok", !isError && !message.startsWith("Cargando") && message !== "Sin datos" && !message.startsWith("Apagado"));
 }
 const timeNow = () => new Date().toLocaleTimeString();
 
@@ -753,15 +748,6 @@ el("saveSources").onclick = () => {
   saveSettings(); loadKml(); loadWaze();
 };
 el("resetAll").onclick = () => { try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ } location.reload(); };
-el("kmlFile").onchange = async (event) => {
-  const file = event.target.files[0]; if (!file) return;
-  try {
-    featuresBySource.kml = parseKml(await kmlBytesToText(await file.arrayBuffer()));
-    setStatus("kmlStatus", `${featuresBySource.kml.length} elementos · archivo ${file.name}`);
-    scheduleRefresh("kml", 0); el("kmlInterval").value = "0"; settings.kmlInterval = "0";
-    afterLoad();
-  } catch (error) { setStatus("kmlStatus", "Archivo inválido: " + error.message, true); }
-};
 el("wazeFile").onchange = async (event) => {
   const file = event.target.files[0]; if (!file) return;
   try {
@@ -810,12 +796,6 @@ document.addEventListener("click", async (event) => {
   const ok = await copyText(button.dataset.copy);
   flashMessage(ok ? `Copiado: ${button.dataset.copy}` : "No se pudo copiar", ok);
 });
-el("copyNames").onclick = async () => {
-  const names = featuresBySource.kml.filter((f) => f.kind === "point" && featurePassesFilters(f)).map((f) => f.name);
-  if (!names.length) return flashMessage("No hay cámaras visibles", false);
-  const ok = await copyText(names.join("\n"));
-  flashMessage(ok ? `${names.length} nombres copiados` : "No se pudo copiar", ok);
-};
 
 // ---------------------------------------------------------------------------
 // Live buses (Intendencia de Montevideo). Markers persist between refreshes and glide to
@@ -921,6 +901,7 @@ async function loadBuses(force) {
   setStatus("busStatus", "Cargando…");
   try {
     const { bytes } = await fetchBytes("", "bus");
+    if (!busesActive()) return;   // the session ended while the request was in flight
     const text = new TextDecoder("utf-8").decode(bytes);
     let data;
     try { data = JSON.parse(text); } catch (error) { throw new Error(text.slice(0, 160) || "respuesta vacía"); }
@@ -932,18 +913,44 @@ async function loadBuses(force) {
     setStatus("busStatus", "No se pudo cargar: " + error.message, true);
   }
 }
-fillSelect(el("busInterval"), [["10", "10 s"], ["20", "20 s"], ["30", "30 s"], ["60", "1 min"], ["0", "Apagado"]], settings.busInterval);
-el("busInterval").onchange = (event) => { settings.busInterval = event.target.value; saveSettings(); scheduleRefresh("bus", event.target.value, loadBuses); };
-el("refreshBus").onclick = () => loadBuses(true);
+// Quota protection: a bus session lasts 40 s from the last switch-on, polls every 10 s only while the tab is visible,
+// then switches everything off by itself. Starting it again is a deliberate click.
+const BUS_REFRESH_SECONDS = 10, BUS_SESSION_SECONDS = 40;
+let busPollTimer = null, busCountdownTimer = null, busSessionEndsAt = 0;
+const busesActive = () => settings.showBuses.all || settings.showBuses.camera;
+
+function startBusSession() {
+  clearInterval(busPollTimer); clearInterval(busCountdownTimer);
+  busSessionEndsAt = Date.now() + BUS_SESSION_SECONDS * 1000;
+  busPollTimer = setInterval(() => loadBuses(), BUS_REFRESH_SECONDS * 1000);   // loadBuses skips hidden tabs
+  busCountdownTimer = setInterval(tickBusSession, 1000);
+  tickBusSession();
+  loadBuses(true);
+}
+function stopBusSession(message) {
+  clearInterval(busPollTimer); clearInterval(busCountdownTimer);
+  settings.showBuses = { all: false, camera: false };
+  el("showBusAll").checked = false; el("showBusCamera").checked = false;
+  busGroup.clearLayers(); busEntries.clear();   // next session starts clean, never with stale positions
+  applyBusVisibility();
+  el("busCountdown").textContent = "";
+  setStatus("busStatus", message || "Apagado");
+}
+function tickBusSession() {
+  const secondsLeft = Math.ceil((busSessionEndsAt - Date.now()) / 1000);
+  if (secondsLeft <= 0) return stopBusSession("Apagado automáticamente (40 s)");
+  el("busCountdown").textContent = `Se apagan en ${secondsLeft} s`;
+}
 [["showBusAll", "all"], ["showBusCamera", "camera"]].forEach(([id, key]) => {
-  el(id).checked = settings.showBuses[key];
+  el(id).checked = false;
   el(id).onchange = (event) => {
-    settings.showBuses[key] = event.target.checked; saveSettings();
-    if (event.target.checked && !busEntries.size) loadBuses(true);
-    applyBusVisibility();
-    if (!settings.showBuses.all && !settings.showBuses.camera) setStatus("busStatus", "Apagado");
+    settings.showBuses[key] = event.target.checked;
+    if (event.target.checked) startBusSession();
+    else if (!busesActive()) stopBusSession();
+    else applyBusVisibility();
   };
 });
+document.addEventListener("visibilitychange", () => { if (busesActive() && !document.hidden) loadBuses(true); });   // fresh data when coming back to the tab
 
 // Icons in static markup, and panel collapse
 document.querySelectorAll("[data-icon]").forEach((node) => { node.innerHTML = icon(node.dataset.icon, Number(node.dataset.size) || 18); });
@@ -1096,8 +1103,6 @@ if (settings.view) { map.setView([settings.view[0], settings.view[1]], settings.
 loadKml(); loadWaze();
 scheduleRefresh("kml", settings.kmlInterval, loadKml);
 scheduleRefresh("waze", settings.wazeInterval, loadWaze);
-scheduleRefresh("bus", settings.busInterval, loadBuses);
-loadBuses();
 </script>
 </body>
 </html>

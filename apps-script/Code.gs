@@ -7,7 +7,7 @@
 // Each feed is cached for a few seconds so any number of viewers causes few upstream calls.
 
 const CHUNK_SIZE = 90000;   // CacheService limits a value to 100 KB, so long feeds are split.
-const CACHE_SECONDS = { waze: 55, kml: 55, bus: 12 };
+const CACHE_SECONDS = { waze: 55, kml: 55, bus: 8 };   // shorter than the 10 s page polling, so every poll sees fresh data
 const DEFAULT_MVD_TOKEN_URL = "https://mvdapi-auth.montevideo.gub.uy/token";
 const DEFAULT_BUS_API_URL = "https://api.montevideo.gub.uy/api/transportepublico/buses";
 
