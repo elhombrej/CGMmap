@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mapa CCTV + Waze</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root { --bg:#fff; --panel:#f6f7f9; --text:#1c1f24; --muted:#6a7280; --line:#d9dde3; --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#14171c; --panel:#1d2128; --text:#e6e8eb; --muted:#8c94a3; --line:#2f3540; --accent:#60a5fa; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height:100%; margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; }
+  #app { display:flex; height:100%; }
+  #sidebar { width:340px; max-width:90vw; overflow-y:auto; background:var(--panel); border-right:1px solid var(--line); padding:12px 16px; }
+  #map { flex:1; }
+  h1 { font-size:17px; margin:4px 0 10px; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); margin:18px 0 6px; }
+  label { display:block; margin:4px 0; }
+  input[type=text], input[type=search], select { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
+  button { padding:6px 10px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); cursor:pointer; }
+  button:hover { border-color:var(--accent); }
+  .row { display:flex; gap:6px; align-items:center; }
+  .row > * { flex:1; }
+  .row > button, .row > input[type=color], .row > input[type=range] { flex:none; }
+  .layer { display:flex; align-items:center; gap:6px; padding:4px 0; border-bottom:1px solid var(--line); }
+  .layer .name { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .layer .count { color:var(--muted); font-size:12px; }
+  .layer input[type=color] { width:26px; height:22px; padding:0; border:none; background:none; }
+  .status { font-size:12px; color:var(--muted); margin:2px 0 6px; }
+  .status.err { color:#dc2626; }
+  details { margin-top:14px; }
+  summary { cursor:pointer; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  .waze-pin { font-size:18px; text-align:center; line-height:24px; background:#fff; border:2px solid; border-radius:50%; width:28px !important; height:28px !important; }
+  .dark-tiles { filter: invert(1) hue-rotate(180deg) brightness(.95) contrast(.9); }
+  .popup-desc img { max-width:220px; height:auto; }
+  @media (max-width: 700px) { #app { flex-direction:column-reverse; } #sidebar { width:100%; max-width:none; height:45%; } }
+</style>
+</head>
+<body>
+<div id="app">
+  <aside id="sidebar">
+    <h1>Mapa CCTV + Waze</h1>
+
+    <h2>Buscar</h2>
+    <input type="search" id="searchBox" placeholder="Filtrar puntos por nombre…">
+
+    <h2>Google My Maps</h2>
+    <div class="status" id="kmlStatus">Sin datos</div>
+    <div class="row">
+      <button id="refreshKml">Actualizar</button>
+      <label style="flex:1;margin:0">Auto: <select id="kmlInterval"></select></label>
+    </div>
+    <label style="margin-top:6px">Cargar KML/KMZ manual: <input type="file" id="kmlFile" accept=".kml,.kmz"></label>
+    <div id="kmlLayers"></div>
+
+    <h2>Waze</h2>
+    <div class="status" id="wazeStatus">Sin datos</div>
+    <div class="row">
+      <button id="refreshWaze">Actualizar</button>
+      <label style="flex:1;margin:0">Auto: <select id="wazeInterval"></select></label>
+    </div>
+    <label style="margin-top:6px">Cargar JSON manual: <input type="file" id="wazeFile" accept=".json"></label>
+    <div class="row" style="margin-top:6px">
+      <label style="margin:0">Antigüedad máx. <select id="maxAge"></select></label>
+      <label style="margin:0">Confiab. mín. <select id="minRel"></select></label>
+    </div>
+    <div id="wazeLayers"></div>
+    <div id="wazeTypes"></div>
+
+    <h2>Vista</h2>
+    <label>Mapa base <select id="baseMap"></select></label>
+    <div class="row" style="margin-top:6px">
+      <button id="fitBtn">Ajustar a datos</button>
+      <button id="exportBtn">Exportar GeoJSON</button>
+    </div>
+
+    <details id="sourcesPanel">
+      <summary>Configuración de fuentes</summary>
+      <label>URL Waze <input type="text" id="wazeUrl"></label>
+      <label>URL KML (My Maps) <input type="text" id="kmlUrl"></label>
+      <label>Proxy CORS propio (opcional), use {url}
+        <input type="text" id="proxyUrl" placeholder="https://mi-worker.workers.dev/?url={url}"></label>
+      <div class="row" style="margin-top:6px">
+        <button id="saveSources">Guardar</button>
+        <button id="resetAll">Restablecer todo</button>
+      </div>
+      <div class="status">Los navegadores bloquean (CORS) estas URLs. Se intenta directo, luego su proxy, luego proxies públicos. Un proxy propio es lo más seguro: la URL de Waze incluye su token.</div>
+    </details>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script>
+"use strict";
+
+// ---------------------------------------------------------------------------
+// Default configuration. Everything here can be changed from the sidebar.
+// ---------------------------------------------------------------------------
+// When served over http(s) (e.g. Vercel) the real URLs stay on the server, in the
+// WAZE_URL / KML_URL environment variables, and the page only calls /api/proxy.
+const USE_SERVER_SOURCES = location.protocol.startsWith("http");
+// Paste your Apps Script web app URL here (ends in /exec) to use Google instead of Vercel.
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzKUGYPes8Hp9cc1P4zgFLmDbtANCx0hsKuV4qZctuHIT0tAfCNCgJbvVzjaCI3hDo2/exec";
+const API_BASE = APPS_SCRIPT_URL || "/api/proxy";
+const SERVER_SOURCE_PATHS = { waze: API_BASE + "?src=waze", kml: API_BASE + "?src=kml" };
+const DEFAULT_SOURCES = { wazeUrl: "", kmlUrl: "", proxyUrl: "" };
+const PUBLIC_PROXIES = [
+  "https://corsproxy.io/?url={url}",
+  "https://api.allorigins.win/raw?url={url}"
+];
+const INTERVAL_OPTIONS = [["0", "Apagado"], ["30", "30 s"], ["60", "1 min"], ["300", "5 min"], ["900", "15 min"]];
+const BASE_MAPS = {
+  // All of these work without an API key (fair-use limits apply; fine for a personal map).
+  "OpenStreetMap": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png", "© OpenStreetMap", ""],
+  "Oscuro (OSM invertido)": ["https://tile.openstreetmap.org/{z}/{x}/{y}.png", "© OpenStreetMap", "dark-tiles"],
+  "Humanitario (OSM)": ["https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", "© OpenStreetMap, HOT", ""],
+  "Topográfico": ["https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png", "© OpenTopoMap", ""],
+  "Satélite (Esri)": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", "© Esri", ""]
+};
+const WAZE_ALERT_STYLES = {
+  ACCIDENT: ["🚗", "#dc2626", "Accidente"], JAM: ["🐌", "#ea580c", "Tráfico"],
+  HAZARD: ["⚠️", "#ca8a04", "Peligro"], ROAD_CLOSED: ["⛔", "#7f1d1d", "Vía cerrada"],
+  WEATHERHAZARD: ["🌧️", "#0891b2", "Clima"], POLICE: ["👮", "#2563eb", "Policía"], MISC: ["❓", "#6b7280", "Otro"]
+};
+const WAZE_SUBTYPE_STYLES = {
+  HAZARD_ON_ROAD_POT_HOLE: ["🕳️", "Bache"], HAZARD_ON_ROAD_CONSTRUCTION: ["🚧", "Obras"],
+  HAZARD_ON_ROAD_LANE_CLOSED: ["🚫", "Carril cerrado"], HAZARD_ON_ROAD_TRAFFIC_LIGHT_FAULT: ["🚦", "Semáforo con falla"],
+  HAZARD_ON_ROAD: ["⚠️", "Peligro en la vía"], ACCIDENT_MAJOR: ["🚗", "Accidente grave"], ACCIDENT_MINOR: ["🚗", "Accidente leve"]
+};
+const JAM_LEVEL_COLORS = ["#16a34a", "#84cc16", "#eab308", "#f97316", "#dc2626", "#7f1d1d"];
+const DEFAULT_KML_COLOR = "#2563eb";
+
+// ---------------------------------------------------------------------------
+// Persistent settings (localStorage, guarded because it can be unavailable).
+// ---------------------------------------------------------------------------
+const STORAGE_KEY = "mapa-cctv-waze-v1";
+function loadSettings() {
+  const fresh = { sources: { ...DEFAULT_SOURCES }, layers: {}, hiddenAlertTypes: [], baseMap: "OpenStreetMap",
+                  kmlInterval: "60", wazeInterval: "60", view: null, maxAgeHours: 0, minReliability: 0 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    if (saved) return { ...fresh, ...saved, sources: { ...fresh.sources, ...saved.sources } };
+  } catch (error) { /* ignore */ }
+  return fresh;
+}
+const settings = loadSettings();
+function saveSettings() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch (error) { /* ignore */ }
+}
+function layerSetting(layerId) {
+  return settings.layers[layerId] || (settings.layers[layerId] = { visible: true, color: null, size: 8 });
+}
+
+// ---------------------------------------------------------------------------
+// Data model. Every feature, from either source, is normalised to:
+// { layerId, source, kind: "point"|"line"|"polygon", name, html, coords, color, icon, extra }
+// ---------------------------------------------------------------------------
+const featuresBySource = { kml: [], waze: [] };
+const layerNames = {};   // layerId -> display name
+
+const map = L.map("map", { preferCanvas: true }).setView([-34.9, -56.16], 11);
+let baseTileLayer = null;
+const dataGroup = L.layerGroup().addTo(map);
+
+function setBaseMap(name) {
+  if (!BASE_MAPS[name]) name = "OpenStreetMap";   // also migrates old saved choices
+  const [url, attribution, className] = BASE_MAPS[name];
+  if (baseTileLayer) map.removeLayer(baseTileLayer);
+  baseTileLayer = L.tileLayer(url, { attribution, maxZoom: 19, className }).addTo(map);
+  settings.baseMap = name; saveSettings();
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+const el = (id) => document.getElementById(id);
+function escapeHtml(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+// Removes scripts and event handlers from HTML that comes from KML descriptions.
+function sanitizeHtml(html) {
+  const template = document.createElement("template");
+  template.innerHTML = html;
+  template.content.querySelectorAll("script,iframe,object,embed,style,link,meta,form").forEach((node) => node.remove());
+  template.content.querySelectorAll("*").forEach((node) => {
+    [...node.attributes].forEach((attribute) => {
+      const name = attribute.name.toLowerCase(), value = attribute.value.trim().toLowerCase();
+      if (name.startsWith("on") || ((name === "href" || name === "src") && value.startsWith("javascript:"))) node.removeAttribute(attribute.name);
+    });
+    if (node.tagName === "A") { node.target = "_blank"; node.rel = "noopener noreferrer"; }
+  });
+  return template.innerHTML;
+}
+// KML colours are aabbggrr hex; convert to #rrggbb.
+function kmlColorToCss(kmlColor) {
+  if (!kmlColor || kmlColor.length < 8) return null;
+  const c = kmlColor.trim();
+  return "#" + c.slice(6, 8) + c.slice(4, 6) + c.slice(2, 4);
+}
+function setStatus(id, message, isError) {
+  const node = el(id); node.textContent = message; node.classList.toggle("err", !!isError);
+}
+const timeNow = () => new Date().toLocaleTimeString();
+
+// ---------------------------------------------------------------------------
+// Network: try direct first, then user proxy, then public proxies.
+// ---------------------------------------------------------------------------
+async function fetchBytes(url, serverSourceName) {
+  // Server mode: one same-origin call, no fallbacks, so nothing sensitive leaves the site.
+  if (USE_SERVER_SOURCES) url = SERVER_SOURCE_PATHS[serverSourceName];
+  const attempts = [url];
+  const templates = USE_SERVER_SOURCES ? [] : [settings.sources.proxyUrl, ...PUBLIC_PROXIES].filter(Boolean);
+  templates.forEach((template) => attempts.push(template.replace("{url}", encodeURIComponent(url))));
+  let lastError = null;
+  for (const attemptUrl of attempts) {
+    try {
+      const response = await fetch(attemptUrl, { cache: "no-store" });
+      if (!response.ok) throw new Error("HTTP " + response.status);
+      const bytes = await response.arrayBuffer();
+      if (bytes.byteLength === 0) throw new Error("respuesta vacía");
+      return { bytes, via: attemptUrl === url ? (USE_SERVER_SOURCES ? "servidor" : "directo") : new URL(attemptUrl).host };
+    } catch (error) { lastError = error; }
+  }
+  throw lastError || new Error("sin conexión");
+}
+
+// ---------------------------------------------------------------------------
+// KML / KMZ parsing (folders become layers; Google My Maps layers are folders)
+// ---------------------------------------------------------------------------
+async function kmlBytesToText(bytes) {
+  const header = new Uint8Array(bytes.slice(0, 2));
+  if (header[0] === 0x50 && header[1] === 0x4b) {           // "PK" => KMZ (zip)
+    const zip = await JSZip.loadAsync(bytes);
+    const kmlName = Object.keys(zip.files).find((name) => name.toLowerCase().endsWith(".kml"));
+    if (!kmlName) throw new Error("KMZ sin archivo .kml");
+    return zip.files[kmlName].async("string");
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+function parseCoordinates(text) {
+  return (text || "").trim().split(/\s+/).map((triple) => {
+    const [lng, lat] = triple.split(",").map(Number);
+    return [lat, lng];
+  }).filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+}
+function parseKml(kmlText) {
+  const xml = new DOMParser().parseFromString(kmlText, "text/xml");
+  if (xml.querySelector("parsererror")) throw new Error("KML inválido");
+  const childText = (node, tag) => {
+    const child = [...node.children].find((c) => c.localName === tag);
+    return child ? child.textContent : "";
+  };
+  // Resolve style colours (including StyleMap "normal" pair).
+  const styleColors = {};
+  xml.querySelectorAll("Style").forEach((style) => {
+    const id = style.getAttribute("id"); if (!id) return;
+    const color = style.querySelector("IconStyle > color, LineStyle > color, PolyStyle > color");
+    styleColors["#" + id] = kmlColorToCss(color && color.textContent);
+  });
+  xml.querySelectorAll("StyleMap").forEach((styleMap) => {
+    const id = styleMap.getAttribute("id"); if (!id) return;
+    const normal = [...styleMap.querySelectorAll("Pair")].find((pair) => childText(pair, "key") === "normal");
+    if (normal) styleColors["#" + id] = styleColors[childText(normal, "styleUrl").trim()] || null;
+  });
+
+  const features = [];
+  const walk = (node, layerName) => {
+    [...node.children].forEach((child) => {
+      if (child.localName === "Folder") walk(child, childText(child, "name") || "Capa");
+      else if (child.localName === "Document") walk(child, layerName);
+      else if (child.localName === "Placemark") collectPlacemark(child, layerName);
+    });
+  };
+  const collectPlacemark = (placemark, layerName) => {
+    const name = childText(placemark, "name") || "(sin nombre)";
+    const description = childText(placemark, "description");
+    const color = styleColors[childText(placemark, "styleUrl").trim()] || null;
+    const layerId = "kml:" + layerName;
+    layerNames[layerId] = layerName;
+    const base = { layerId, source: "kml", name, color, extra: {}, html: description ? sanitizeHtml(description) : "" };
+    placemark.querySelectorAll("ExtendedData Data").forEach((data) => {
+      const value = data.querySelector("value");
+      if (value && value.textContent.trim()) base.extra[data.getAttribute("name")] = value.textContent.trim();
+    });
+    placemark.querySelectorAll("Point").forEach((point) => {
+      const [coord] = parseCoordinates(childText(point, "coordinates"));
+      if (coord) features.push({ ...base, kind: "point", coords: coord });
+    });
+    placemark.querySelectorAll("LineString").forEach((line) => {
+      const coords = parseCoordinates(childText(line, "coordinates"));
+      if (coords.length > 1) features.push({ ...base, kind: "line", coords });
+    });
+    placemark.querySelectorAll("Polygon").forEach((polygon) => {
+      const rings = [...polygon.querySelectorAll("coordinates")].map((c) => parseCoordinates(c.textContent));
+      if (rings.length) features.push({ ...base, kind: "polygon", coords: rings });
+    });
+  };
+  walk(xml.documentElement, "Capa");
+  return features;
+}
+
+// ---------------------------------------------------------------------------
+// Waze parsing (partner feed JSON: alerts, jams, irregularities)
+// ---------------------------------------------------------------------------
+function parseWaze(data) {
+  const features = [];
+  const asLatLngLine = (line) => (line || []).map((p) => [p.y, p.x]).filter(([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng));
+  const fieldsTable = (rows) => "<table>" + rows.filter(([, v]) => v !== undefined && v !== null && v !== "")
+    .map(([k, v]) => `<tr><td><b>${escapeHtml(k)}</b></td><td>${escapeHtml(v)}</td></tr>`).join("") + "</table>";
+  const published = (millis) => millis ? new Date(Number(millis)).toLocaleString() : "";
+  layerNames["waze:alerts"] = "Alertas Waze";
+  layerNames["waze:jams"] = "Congestión Waze";
+  layerNames["waze:irregularities"] = "Irregularidades Waze";
+
+  (data.alerts || []).forEach((alert) => {
+    const lat = alert.location && alert.location.y, lng = alert.location && alert.location.x;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    const type = alert.type || "MISC";
+    const style = WAZE_ALERT_STYLES[type] || WAZE_ALERT_STYLES.MISC;
+    const subtypeStyle = WAZE_SUBTYPE_STYLES[alert.subtype];
+    const alertLabel = subtypeStyle ? subtypeStyle[1] : style[2] + (alert.subtype ? " · " + alert.subtype.replace(/_/g, " ").toLowerCase() : "");
+    features.push({
+      layerId: "waze:alerts", source: "waze", kind: "point", coords: [lat, lng],
+      alertType: type + "|" + (alert.subtype || ""), alertLabel, pubMillis: Number(alert.pubMillis) || 0, reliability: Number(alert.reliability) || 0,
+      name: [alertLabel, alert.street || alert.reportDescription].filter(Boolean).join(" · "),
+      color: style[1], icon: subtypeStyle ? subtypeStyle[0] : style[0], extra: {},
+      html: fieldsTable([["Tipo", type], ["Subtipo", alert.subtype], ["Calle", alert.street], ["Ciudad", alert.city],
+        ["Confiabilidad", alert.reliability], ["Calificación", alert.reportRating], ["Confianza", alert.confidence], ["👍", alert.nThumbsUp],
+        ["Descripción", alert.reportDescription], ["Publicado", published(alert.pubMillis)]])
+    });
+  });
+  (data.jams || []).forEach((jam) => {
+    const coords = asLatLngLine(jam.line);
+    if (coords.length < 2) return;
+    const level = Math.min(5, Math.max(0, Number(jam.level) || 0));
+    features.push({
+      layerId: "waze:jams", source: "waze", kind: "line", coords, color: JAM_LEVEL_COLORS[level], extra: {},
+      name: "Congestión · " + (jam.street || "sin calle"),
+      html: fieldsTable([["Calle", jam.street], ["Ciudad", jam.city], ["Nivel", level], ["Velocidad km/h", jam.speedKMH && Math.round(jam.speedKMH)],
+        ["Largo m", jam.length], ["Retraso s", jam.delay], ["Publicado", published(jam.pubMillis)]])
+    });
+  });
+  (data.irregularities || []).forEach((item) => {
+    const coords = asLatLngLine(item.line);
+    if (coords.length < 2) return;
+    features.push({
+      layerId: "waze:irregularities", source: "waze", kind: "line", coords, color: "#9333ea", extra: {},
+      name: "Irregularidad · " + (item.street || item.detectionDateMillis || ""),
+      html: fieldsTable([["Calle", item.street], ["Ciudad", item.city], ["Severidad", item.severity],
+        ["Velocidad km/h", item.speed && Math.round(item.speed)], ["Alertas", item.alertsCount]])
+    });
+  });
+  return features;
+}
+
+// ---------------------------------------------------------------------------
+// Rendering: rebuild all Leaflet layers from the normalised features.
+// ---------------------------------------------------------------------------
+function featurePassesFilters(feature) {
+  if (!layerSetting(feature.layerId).visible) return false;
+  if (feature.alertType) {
+    if (settings.hiddenAlertTypes.includes(feature.alertType)) return false;
+    if (settings.maxAgeHours > 0 && Date.now() - feature.pubMillis > settings.maxAgeHours * 3600000) return false;
+    if (feature.reliability < settings.minReliability) return false;
+  }
+  const query = el("searchBox").value.trim().toLowerCase();
+  if (query && feature.source === "kml") {
+    const haystack = (feature.name + " " + Object.values(feature.extra).join(" ")).toLowerCase();
+    return haystack.includes(query);
+  }
+  return true;
+}
+function popupContent(feature) {
+  const extras = Object.entries(feature.extra).map(([k, v]) => `<div><b>${escapeHtml(k)}:</b> ${escapeHtml(v)}</div>`).join("");
+  return `<b>${escapeHtml(feature.name)}</b><div class="popup-desc">${feature.html || ""}${extras}</div>`;
+}
+function renderFeature(feature) {
+  const layerConfig = layerSetting(feature.layerId);
+  const color = layerConfig.color || feature.color || DEFAULT_KML_COLOR;
+  let leafletLayer;
+  if (feature.kind === "point") {
+    if (feature.icon && !layerConfig.color) {
+      const size = 16 + layerConfig.size;
+      leafletLayer = L.marker(feature.coords, { icon: L.divIcon({
+        className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+        html: `<div class="waze-pin" style="border-color:${color};width:${size}px;height:${size}px;line-height:${size - 4}px;font-size:${size * 0.6}px">${feature.icon}</div>` }) });
+    } else {
+      leafletLayer = L.circleMarker(feature.coords, { radius: layerConfig.size, color: "#fff", weight: 1.5, fillColor: color, fillOpacity: 0.95 });
+    }
+  } else if (feature.kind === "line") {
+    leafletLayer = L.polyline(feature.coords, { color, weight: Math.max(2, layerConfig.size / 2), opacity: 0.85 });
+  } else {
+    leafletLayer = L.polygon(feature.coords, { color, weight: 2, fillOpacity: 0.25 });
+  }
+  leafletLayer.bindPopup(popupContent(feature), { maxWidth: 300 });
+  leafletLayer.bindTooltip(feature.name, { sticky: true });
+  return leafletLayer;
+}
+function render() {
+  dataGroup.clearLayers();
+  const counts = {};
+  [...featuresBySource.kml, ...featuresBySource.waze].forEach((feature) => {
+    counts[feature.layerId] = (counts[feature.layerId] || 0) + 1;
+    if (featurePassesFilters(feature)) dataGroup.addLayer(renderFeature(feature));
+  });
+  return counts;
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar panels (layer list with visibility, colour and size controls)
+// ---------------------------------------------------------------------------
+function buildLayerPanel(containerId, source) {
+  const container = el(containerId);
+  container.innerHTML = "";
+  const layerIds = [...new Set(featuresBySource[source].map((f) => f.layerId))];
+  layerIds.forEach((layerId) => {
+    const config = layerSetting(layerId);
+    const count = featuresBySource[source].filter((f) => f.layerId === layerId).length;
+    const row = document.createElement("div");
+    row.className = "layer";
+    row.innerHTML = `<input type="checkbox" ${config.visible ? "checked" : ""}>
+      <span class="name" title="${escapeHtml(layerNames[layerId])}">${escapeHtml(layerNames[layerId])}</span>
+      <span class="count">${count}</span>
+      <input type="range" min="3" max="20" value="${config.size}" title="Tamaño" style="width:60px">
+      <input type="color" value="${config.color || DEFAULT_KML_COLOR}" title="Color (anula el original)">
+      <button title="Restaurar color original">↺</button>`;
+    const [visibleBox, , , sizeSlider, colorPicker, resetButton] = row.children;
+    visibleBox.onchange = () => { config.visible = visibleBox.checked; saveSettings(); render(); };
+    sizeSlider.oninput = () => { config.size = Number(sizeSlider.value); saveSettings(); render(); };
+    colorPicker.oninput = () => { config.color = colorPicker.value; saveSettings(); render(); };
+    resetButton.onclick = () => { config.color = null; colorPicker.value = DEFAULT_KML_COLOR; saveSettings(); render(); };
+    container.appendChild(row);
+  });
+}
+function buildAlertTypePanel() {
+  const container = el("wazeTypes");
+  const groups = {};
+  featuresBySource.waze.filter((f) => f.alertType).forEach((f) => {
+    (groups[f.alertType] = groups[f.alertType] || { label: f.alertLabel, icon: f.icon, count: 0 }).count++;
+  });
+  const keys = Object.keys(groups).sort((x, y) => groups[y].count - groups[x].count);
+  container.innerHTML = keys.length ? "<div class='status' style='margin-top:8px'>Tipos de alerta</div>" : "";
+  keys.forEach((key) => {
+    const label = document.createElement("label");
+    label.innerHTML = `<input type="checkbox" ${settings.hiddenAlertTypes.includes(key) ? "" : "checked"}> ${groups[key].icon} ${escapeHtml(groups[key].label)} <span class="count">${groups[key].count}</span>`;
+    label.firstChild.onchange = (event) => {
+      settings.hiddenAlertTypes = settings.hiddenAlertTypes.filter((t) => t !== key);
+      if (!event.target.checked) settings.hiddenAlertTypes.push(key);
+      saveSettings(); render();
+    };
+    container.appendChild(label);
+  });
+}
+function refreshPanels() {
+  buildLayerPanel("kmlLayers", "kml");
+  buildLayerPanel("wazeLayers", "waze");
+  buildAlertTypePanel();
+  render();
+}
+
+// ---------------------------------------------------------------------------
+// Loading data
+// ---------------------------------------------------------------------------
+let hasFitted = false;
+function fitToData() {
+  const points = [];
+  dataGroup.eachLayer((layer) => {
+    if (layer.getLatLng) points.push(layer.getLatLng());
+    else if (layer.getBounds) { const b = layer.getBounds(); points.push(b.getSouthWest(), b.getNorthEast()); }
+  });
+  if (points.length) map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 16 });
+}
+function afterLoad() {
+  refreshPanels();
+  if (!hasFitted && dataGroup.getLayers().length) { fitToData(); hasFitted = true; }
+}
+async function loadKml() {
+  setStatus("kmlStatus", "Cargando…");
+  try {
+    const { bytes, via } = await fetchBytes(settings.sources.kmlUrl, "kml");
+    featuresBySource.kml = parseKml(await kmlBytesToText(bytes));
+    setStatus("kmlStatus", `${featuresBySource.kml.length} elementos · ${timeNow()} · vía ${via}`);
+    afterLoad();
+  } catch (error) {
+    setStatus("kmlStatus", "No se pudo cargar (" + error.message + "). Use el archivo manual o un proxy.", true);
+  }
+}
+async function loadWaze() {
+  setStatus("wazeStatus", "Cargando…");
+  try {
+    const { bytes, via } = await fetchBytes(settings.sources.wazeUrl, "waze");
+    featuresBySource.waze = parseWaze(JSON.parse(new TextDecoder("utf-8").decode(bytes)));
+    setStatus("wazeStatus", `${featuresBySource.waze.length} elementos · ${timeNow()} · vía ${via}`);
+    afterLoad();
+  } catch (error) {
+    setStatus("wazeStatus", "No se pudo cargar (" + error.message + "). Use el archivo manual o un proxy.", true);
+  }
+}
+
+// Auto-refresh timers
+const timers = {};
+function scheduleRefresh(key, seconds, task) {
+  clearInterval(timers[key]);
+  if (Number(seconds) > 0) timers[key] = setInterval(task, Number(seconds) * 1000);
+}
+
+// ---------------------------------------------------------------------------
+// Wiring
+// ---------------------------------------------------------------------------
+function fillSelect(select, options, current) {
+  select.innerHTML = options.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
+}
+fillSelect(el("kmlInterval"), INTERVAL_OPTIONS, settings.kmlInterval);
+fillSelect(el("wazeInterval"), INTERVAL_OPTIONS, settings.wazeInterval);
+if (!BASE_MAPS[settings.baseMap]) settings.baseMap = "OpenStreetMap";
+fillSelect(el("baseMap"), Object.keys(BASE_MAPS).map((n) => [n, n]), settings.baseMap);
+if (USE_SERVER_SOURCES) el("sourcesPanel").style.display = "none";   // URLs are server-side
+el("wazeUrl").value = settings.sources.wazeUrl;
+el("kmlUrl").value = settings.sources.kmlUrl;
+el("proxyUrl").value = settings.sources.proxyUrl;
+
+fillSelect(el("maxAge"), [["0", "Sin límite"], ["1", "1 h"], ["6", "6 h"], ["24", "24 h"], ["72", "3 días"], ["168", "7 días"]], String(settings.maxAgeHours));
+fillSelect(el("minRel"), [["0", "Todas"], ["5", "≥ 5"], ["7", "≥ 7"], ["9", "≥ 9"]], String(settings.minReliability));
+el("maxAge").onchange = (e) => { settings.maxAgeHours = Number(e.target.value); saveSettings(); render(); };
+el("minRel").onchange = (e) => { settings.minReliability = Number(e.target.value); saveSettings(); render(); };
+el("baseMap").onchange = (e) => setBaseMap(e.target.value);
+el("searchBox").oninput = () => render();
+el("refreshKml").onclick = loadKml;
+el("refreshWaze").onclick = loadWaze;
+el("kmlInterval").onchange = (e) => { settings.kmlInterval = e.target.value; saveSettings(); scheduleRefresh("kml", e.target.value, loadKml); };
+el("wazeInterval").onchange = (e) => { settings.wazeInterval = e.target.value; saveSettings(); scheduleRefresh("waze", e.target.value, loadWaze); };
+el("fitBtn").onclick = fitToData;
+el("saveSources").onclick = () => {
+  settings.sources = { wazeUrl: el("wazeUrl").value.trim(), kmlUrl: el("kmlUrl").value.trim(), proxyUrl: el("proxyUrl").value.trim() };
+  saveSettings(); loadKml(); loadWaze();
+};
+el("resetAll").onclick = () => { try { localStorage.removeItem(STORAGE_KEY); } catch (e) { /* ignore */ } location.reload(); };
+el("kmlFile").onchange = async (event) => {
+  const file = event.target.files[0]; if (!file) return;
+  try {
+    featuresBySource.kml = parseKml(await kmlBytesToText(await file.arrayBuffer()));
+    setStatus("kmlStatus", `${featuresBySource.kml.length} elementos · archivo ${file.name}`);
+    scheduleRefresh("kml", 0); el("kmlInterval").value = "0"; settings.kmlInterval = "0";
+    afterLoad();
+  } catch (error) { setStatus("kmlStatus", "Archivo inválido: " + error.message, true); }
+};
+el("wazeFile").onchange = async (event) => {
+  const file = event.target.files[0]; if (!file) return;
+  try {
+    featuresBySource.waze = parseWaze(JSON.parse(await file.text()));
+    setStatus("wazeStatus", `${featuresBySource.waze.length} elementos · archivo ${file.name}`);
+    scheduleRefresh("waze", 0); el("wazeInterval").value = "0"; settings.wazeInterval = "0";
+    afterLoad();
+  } catch (error) { setStatus("wazeStatus", "Archivo inválido: " + error.message, true); }
+};
+el("exportBtn").onclick = () => {
+  const geoFeatures = [...featuresBySource.kml, ...featuresBySource.waze].filter(featurePassesFilters).map((f) => {
+    const flip = ([lat, lng]) => [lng, lat];
+    const geometry = f.kind === "point" ? { type: "Point", coordinates: flip(f.coords) }
+      : f.kind === "line" ? { type: "LineString", coordinates: f.coords.map(flip) }
+      : { type: "Polygon", coordinates: f.coords.map((ring) => ring.map(flip)) };
+    return { type: "Feature", geometry, properties: { name: f.name, layer: layerNames[f.layerId], ...f.extra } };
+  });
+  const blob = new Blob([JSON.stringify({ type: "FeatureCollection", features: geoFeatures })], { type: "application/geo+json" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob); link.download = "mapa.geojson"; link.click();
+  URL.revokeObjectURL(link.href);
+};
+map.on("moveend", () => { settings.view = [map.getCenter().lat, map.getCenter().lng, map.getZoom()]; saveSettings(); });
+
+// Startup
+setBaseMap(settings.baseMap);
+if (settings.view) { map.setView([settings.view[0], settings.view[1]], settings.view[2]); hasFitted = true; }
+loadKml(); loadWaze();
+scheduleRefresh("kml", settings.kmlInterval, loadKml);
+scheduleRefresh("waze", settings.wazeInterval, loadWaze);
+</script>
+</body>
+</html>
