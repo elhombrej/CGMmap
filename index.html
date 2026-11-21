@@ -190,7 +190,7 @@
       <div class="card-title"><span class="ti" data-icon="bus" data-size="16"></span>Buses Montevideo</div>
       <div class="status" id="busStatus">Apagado</div>
       <div class="hint" id="busCountdown"></div>
-      <div class="hint">Se actualiza cada 10 s solo mientras esta pestaña está visible, y se apaga sola a los 40 s para cuidar la cuota. Con cámara: CUTCSA, COETC, COME y UCOT; los demás se ven en gris con "Todos los buses".</div>
+      <div class="hint">Se actualiza cada 10 s solo mientras esta pestaña está visible, y se apaga sola a los 40 s para cuidar la cuota. Con cámara: los 259 coches de la lista CGM (en verde azulado con cámara). Los demás se ven en gris con "Todos los buses".</div>
     </section>
 
     <section class="card">
@@ -819,11 +819,13 @@ function parseBusTime(text) {
   return Number.isFinite(millis) ? millis : 0;
 }
 const isValidPosition = ([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
-// Optional exact list of buses that carry a live camera, as "COMPANY-busId" (e.g. "CUTCSA-446").
-// While the list is empty, every bus of the four camera companies counts as a camera bus.
-const CAMERA_BUS_IDS = [];
-function isCameraBus(company, busId) {
-  if (CAMERA_BUS_IDS.length) return CAMERA_BUS_IDS.includes(`${company.toUpperCase()}-${busId}`);
+// Buses that carry a live camera (CGM list, 259 vehicles). The list shows licence numbers such as CUTCSA-0359 or
+// CUTCSA-BT2013; they match the API's numeric busId (359, 2013). While the list is empty, every bus of the four
+// camera companies counts as a camera bus.
+const CAMERA_BUS_NUMBERS = {"CUTCSA":[1,4,16,18,30,32,33,34,35,37,50,51,55,57,62,64,78,79,83,87,88,95,102,111,115,117,119,125,127,141,142,146,148,149,160,161,168,185,196,199,202,211,214,236,243,246,247,255,261,263,267,277,292,294,297,307,309,312,313,314,331,340,346,348,350,354,359,361,366,395,405,415,418,419,439,461,470,471,475,476,477,481,483,485,499,507,509,523,524,525,528,533,535,538,546,550,554,555,561,563,571,572,575,579,580,581,582,583,588,589,593,594,595,596,598,599,600,603,604,606,607,609,615,616,618,623,624,627,633,635,636,637,639,640,641,643,645,647,650,657,664,687,800,859,862,869,870,892,1047,1048,1049,1050,1051,1052,1053,1054,1095,1097,1098,1104,1107,1108,1109,1110,1111,1114,2010,2013,2016],"COME":[1,3,7,8,16,18,21,28,29,34,37,51,65,98,100,101,103,105,106,107,116,120],"UCOT":[7,12,14,38,41,50,53,58,62,69,72,93,106,107,108,109,111,112,113,114,115,116,117,125,126,127,155,163],"COETC":[7,8,22,46,52,53,55,63,64,70,79,82,92,93,94,174,175,176,184,186,187,190,193,197,199,203,204,205,206,209,255,273,282,284,285,286,287,288,289,293]};
+const CAMERA_BUS_KEYS = new Set(Object.entries(CAMERA_BUS_NUMBERS).flatMap(([company, numbers]) => numbers.map((number) => `${company}-${number}`)));
+function isCameraBus(company, busNumber) {
+  if (CAMERA_BUS_KEYS.size) return CAMERA_BUS_KEYS.has(`${company.toUpperCase()}-${Number(busNumber)}`);
   return CAMERA_BUS_COMPANIES.some((name) => company.toUpperCase().includes(name));
 }
 function parseBuses(data) {
@@ -929,8 +931,12 @@ async function loadBuses(force) {
     if (rawCount && !buses.length) throw new Error("formato inesperado, campos: " + sampleKeys.join(", "));
     updateBuses(buses);
     const cameraCount = buses.filter((bus) => bus.camera).length;
-    let summary = `${buses.length} buses (${cameraCount} con cámara) · ${timeNow()}` + (invalidPositions ? ` · ${invalidPositions} sin GPS válido` : "");
-    if (buses.length && !cameraCount) {   // help diagnose: show what the API calls the companies
+    const seenIds = new Set(buses.map((bus) => bus.id));
+    const missingFromFeed = [...CAMERA_BUS_KEYS].filter((key) => !seenIds.has(key));
+    let summary = `${buses.length} buses · ${cameraCount} con cámara (lista: ${CAMERA_BUS_KEYS.size - missingFromFeed.length}/${CAMERA_BUS_KEYS.size} en el feed) · ${timeNow()}` +
+                  (invalidPositions ? ` · ${invalidPositions} sin GPS válido` : "");
+    if (missingFromFeed.length) console.log("camera-list buses not in the feed right now:", missingFromFeed.join(", "));
+    if (buses.length && !cameraCount && !CAMERA_BUS_KEYS.size) {   // help diagnose: show what the API calls the companies
       const companies = [...new Set(buses.map((bus) => bus.company).filter(Boolean))].slice(0, 6);
       summary += companies.length ? " · empresas vistas: " + companies.join(", ") : " · sin campo de empresa; campos: " + sampleKeys.join(", ");
     }
