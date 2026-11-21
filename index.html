@@ -820,7 +820,8 @@ function parseBuses(data) {
     const source = record.properties ? { ...record.properties, location: record.geometry } : record;
     const coords = pickLatLng(source);
     if (!Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) return;
-    const company = String(source.company ?? source.companyName ?? source.empresa ?? source.operator ?? "");
+    const rawCompany = source.company ?? source.companyName ?? source.empresa ?? source.operador ?? source.operator ?? source.agency ?? "";
+    const company = String(typeof rawCompany === "object" && rawCompany ? (rawCompany.name ?? rawCompany.nombre ?? rawCompany.description ?? "") : rawCompany);
     buses.push({
       id: String(source.id ?? source.busId ?? source.vehicleId ?? source.identifier ?? `${company}-${index}`),
       line: String(source.line ?? source.lineName ?? source.lineVariantDescription ?? source.linea ?? ""),
@@ -908,7 +909,14 @@ async function loadBuses(force) {
     const { buses, rawCount, sampleKeys } = parseBuses(data);
     if (rawCount && !buses.length) throw new Error("formato inesperado, campos: " + sampleKeys.join(", "));
     updateBuses(buses);
-    setStatus("busStatus", `${buses.length} buses · ${timeNow()}`);
+    const cameraCount = buses.filter((bus) => bus.camera).length;
+    let summary = `${buses.length} buses (${cameraCount} con cámara) · ${timeNow()}`;
+    if (buses.length && !cameraCount) {   // help diagnose: show what the API calls the companies
+      const companies = [...new Set(buses.map((bus) => bus.company).filter(Boolean))].slice(0, 6);
+      summary += companies.length ? " · empresas vistas: " + companies.join(", ") : " · sin campo de empresa; campos: " + sampleKeys.join(", ");
+    }
+    console.log("bus sample record:", Array.isArray(data) ? data[0] : data);
+    setStatus("busStatus", summary);
   } catch (error) {
     setStatus("busStatus", "No se pudo cargar: " + error.message, true);
   }
