@@ -103,6 +103,12 @@
   .pin.priority::after { content:""; position:absolute; inset:-7px; border-radius:50%; border:3px solid var(--pin); opacity:0; animation:pulse 1.8s ease-out infinite; pointer-events:none; }
   @keyframes pulse { 0% { transform:scale(.6); opacity:.9; } 100% { transform:scale(1.25); opacity:0; } }
   @media (prefers-reduced-motion: reduce) { .pin.priority::after { animation:none; opacity:.5; } }
+  .hint { font-size:12px; color:var(--muted); margin-top:8px; }
+  /* Buses: square-ish badges so they read differently from round Waze/camera pins */
+  .bus { position:relative; display:grid; place-items:center; color:#fff; border:2px solid #fff; border-radius:6px; box-shadow:0 1px 4px rgba(0,0,0,.4); }
+  .bus-camera { background:#0f9d8a; width:26px; height:26px; }
+  .bus-other { background:#8b98a8; width:18px; height:18px; border-width:1.5px; }
+  .bus .cam { position:absolute; right:-7px; top:-7px; width:15px; height:15px; border-radius:50%; background:#fff; color:#0f9d8a; display:grid; place-items:center; box-shadow:0 1px 3px rgba(0,0,0,.4); }
   .dark-tiles { filter:invert(1) hue-rotate(180deg) brightness(.95) contrast(.9); }
 
   /* Leaflet restyle */
@@ -176,6 +182,18 @@
     <section class="card" style="padding:6px 14px">
       <label class="switch-row"><span>Cámaras <span class="count-pill" id="countKml"></span></span><span class="switch"><input type="checkbox" id="showKml"><span></span></span></label>
       <label class="switch-row"><span>Waze <span class="count-pill" id="countWaze"></span></span><span class="switch"><input type="checkbox" id="showWaze"><span></span></span></label>
+      <label class="switch-row"><span>Buses con cámara <span class="count-pill" id="countBusCamera"></span></span><span class="switch"><input type="checkbox" id="showBusCamera"><span></span></span></label>
+      <label class="switch-row"><span>Todos los buses <span class="count-pill" id="countBusAll"></span></span><span class="switch"><input type="checkbox" id="showBusAll"><span></span></span></label>
+    </section>
+
+    <section class="card">
+      <div class="card-title"><span class="ti" data-icon="bus" data-size="16"></span>Buses Montevideo</div>
+      <div class="status" id="busStatus">Apagado</div>
+      <div class="row">
+        <button class="btn" id="refreshBus"><span data-icon="refresh-cw" data-size="16"></span>Actualizar</button>
+        <select id="busInterval" title="Actualización automática"></select>
+      </div>
+      <div class="hint">Con cámara: CUTCSA, COETC, COME y UCOT. Los demás buses se ven en gris y solo con "Todos los buses".</div>
     </section>
 
     <section class="card">
@@ -262,6 +280,7 @@
 const ICON_PATHS = {"cctv": "<path d=\"M16.75 12h3.632a1 1 0 0 1 .894 1.447l-2.034 4.069a1 1 0 0 1-1.708.134l-2.124-2.97\" /> <path d=\"M17.106 9.053a1 1 0 0 1 .447 1.341l-3.106 6.211a1 1 0 0 1-1.342.447L3.61 12.3a2.92 2.92 0 0 1-1.3-3.91L3.69 5.6a2.92 2.92 0 0 1 3.92-1.3z\" /> <path d=\"M2 19h3.76a2 2 0 0 0 1.8-1.1L9 15\" /> <path d=\"M2 21v-4\" /> <path d=\"M7 9h.01\" />", "construction": "<rect x=\"2\" y=\"6\" width=\"20\" height=\"8\" rx=\"1\" /> <path d=\"M17 14v7\" /> <path d=\"M7 14v7\" /> <path d=\"M17 3v3\" /> <path d=\"M7 3v3\" /> <path d=\"M10 14 2.3 6.3\" /> <path d=\"m14 6 7.7 7.7\" /> <path d=\"m8 6 8 8\" />", "ban": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <path d=\"m4.9 4.9 14.2 14.2\" />", "octagon-x": "<path d=\"m15 9-6 6\" /> <path d=\"M2.586 16.726A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2h6.624a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586z\" /> <path d=\"m9 9 6 6\" />", "triangle-alert": "<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /> <path d=\"M12 9v4\" /> <path d=\"M12 17h.01\" />", "car-front": "<path d=\"m21 8-2 2-1.5-3.7A2 2 0 0 0 15.646 5H8.4a2 2 0 0 0-1.903 1.257L5 10 3 8\" /> <path d=\"M7 14h.01\" /> <path d=\"M17 14h.01\" /> <rect width=\"18\" height=\"8\" x=\"3\" y=\"10\" rx=\"2\" /> <path d=\"M5 18v2\" /> <path d=\"M19 18v2\" />", "siren": "<path d=\"M7 18v-6a5 5 0 1 1 10 0v6\" /> <path d=\"M5 21a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-1a2 2 0 0 0-2-2H7a2 2 0 0 0-2 2z\" /> <path d=\"M21 12h1\" /> <path d=\"M18.5 4.5 18 5\" /> <path d=\"M2 12h1\" /> <path d=\"M12 2v1\" /> <path d=\"m4.929 4.929.707.707\" /> <path d=\"M12 12v6\" />", "turtle": "<path d=\"m12 10 2 4v3a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-3a8 8 0 1 0-16 0v3a1 1 0 0 0 1 1h2a1 1 0 0 0 1-1v-3l2-4h4Z\" /> <path d=\"M4.82 7.9 8 10\" /> <path d=\"M15.18 7.9 12 10\" /> <path d=\"M16.93 10H20a2 2 0 0 1 0 4H2\" />", "gauge": "<path d=\"m12 14 4-4\" /> <path d=\"M3.34 19a10 10 0 1 1 17.32 0\" />", "cloud-rain": "<path d=\"M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242\" /> <path d=\"M16 14v6\" /> <path d=\"M8 14v6\" /> <path d=\"M12 16v6\" />", "circle-help": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <path d=\"M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3\" /> <path d=\"M12 17h.01\" />", "circle-dashed": "<path d=\"M10.1 2.182a10 10 0 0 1 3.8 0\" /> <path d=\"M13.9 21.818a10 10 0 0 1-3.8 0\" /> <path d=\"M17.609 3.721a10 10 0 0 1 2.69 2.7\" /> <path d=\"M2.182 13.9a10 10 0 0 1 0-3.8\" /> <path d=\"M20.279 17.609a10 10 0 0 1-2.7 2.69\" /> <path d=\"M21.818 10.1a10 10 0 0 1 0 3.8\" /> <path d=\"M3.721 6.391a10 10 0 0 1 2.7-2.69\" /> <path d=\"M6.391 20.279a10 10 0 0 1-2.69-2.7\" />", "route": "<circle cx=\"6\" cy=\"19\" r=\"3\" /> <path d=\"M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15\" /> <circle cx=\"18\" cy=\"5\" r=\"3\" />", "refresh-cw": "<path d=\"M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8\" /> <path d=\"M21 3v5h-5\" /> <path d=\"M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16\" /> <path d=\"M8 16H3v5\" />", "search": "<circle cx=\"11\" cy=\"11\" r=\"8\" /> <path d=\"m21 21-4.3-4.3\" />", "layers": "<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /> <path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /> <path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />", "download": "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\" /> <polyline points=\"7 10 12 15 17 10\" /> <line x1=\"12\" x2=\"12\" y1=\"15\" y2=\"3\" />", "upload": "<path d=\"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4\" /> <polyline points=\"17 8 12 3 7 8\" /> <line x1=\"12\" x2=\"12\" y1=\"3\" y2=\"15\" />", "settings": "<path d=\"M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z\" /> <circle cx=\"12\" cy=\"12\" r=\"3\" />", "maximize": "<path d=\"M8 3H5a2 2 0 0 0-2 2v3\" /> <path d=\"M21 8V5a2 2 0 0 0-2-2h-3\" /> <path d=\"M3 16v3a2 2 0 0 0 2 2h3\" /> <path d=\"M16 21h3a2 2 0 0 0 2-2v-3\" />", "chevron-left": "<path d=\"m15 18-6-6 6-6\" />", "rotate-ccw": "<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /> <path d=\"M3 3v5h5\" />", "map-pin": "<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\" /> <circle cx=\"12\" cy=\"10\" r=\"3\" />", "sliders-horizontal": "<line x1=\"21\" x2=\"14\" y1=\"4\" y2=\"4\" /> <line x1=\"10\" x2=\"3\" y1=\"4\" y2=\"4\" /> <line x1=\"21\" x2=\"12\" y1=\"12\" y2=\"12\" /> <line x1=\"8\" x2=\"3\" y1=\"12\" y2=\"12\" /> <line x1=\"21\" x2=\"16\" y1=\"20\" y2=\"20\" /> <line x1=\"12\" x2=\"3\" y1=\"20\" y2=\"20\" /> <line x1=\"14\" x2=\"14\" y1=\"2\" y2=\"6\" /> <line x1=\"8\" x2=\"8\" y1=\"10\" y2=\"14\" /> <line x1=\"16\" x2=\"16\" y1=\"18\" y2=\"22\" />", "clock": "<circle cx=\"12\" cy=\"12\" r=\"10\" /> <polyline points=\"12 6 12 12 16 14\" />", "radio": "<path d=\"M4.9 19.1C1 15.2 1 8.8 4.9 4.9\" /> <path d=\"M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5\" /> <circle cx=\"12\" cy=\"12\" r=\"2\" /> <path d=\"M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5\" /> <path d=\"M19.1 4.9C23 8.8 23 15.1 19.1 19\" />", "traffic-light": "<rect x=\"8\" y=\"2\" width=\"8\" height=\"20\" rx=\"3\"/><circle cx=\"12\" cy=\"7\" r=\"1\"/><circle cx=\"12\" cy=\"12\" r=\"1\"/><circle cx=\"12\" cy=\"17\" r=\"1\"/>"};
 Object.assign(ICON_PATHS, {"bell": "<path d=\"M10.268 21a2 2 0 0 0 3.464 0\" /> <path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\" />", "history": "<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /> <path d=\"M3 3v5h5\" /> <path d=\"M12 7v5l4 2\" />", "x": "<path d=\"M18 6 6 18\" /> <path d=\"m6 6 12 12\" />", "car": "<path d=\"M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2\" /> <circle cx=\"7\" cy=\"17\" r=\"2\" /> <path d=\"M9 17h6\" /> <circle cx=\"17\" cy=\"17\" r=\"2\" />", "locate-fixed": "<line x1=\"2\" x2=\"5\" y1=\"12\" y2=\"12\" /> <line x1=\"19\" x2=\"22\" y1=\"12\" y2=\"12\" /> <line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"5\" /> <line x1=\"12\" x2=\"12\" y1=\"19\" y2=\"22\" /> <circle cx=\"12\" cy=\"12\" r=\"7\" /> <circle cx=\"12\" cy=\"12\" r=\"3\" />", "trash-2": "<path d=\"M3 6h18\" /> <path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\" /> <path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\" /> <line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\" /> <line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\" />"});
 Object.assign(ICON_PATHS, {"copy": "<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\" /> <path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\" />", "check": "<path d=\"M20 6 9 17l-5-5\" />"});
+Object.assign(ICON_PATHS, {"bus": "<path d=\"M8 6v6\" /> <path d=\"M15 6v6\" /> <path d=\"M2 12h19.6\" /> <path d=\"M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3\" /> <circle cx=\"7\" cy=\"18\" r=\"2\" /> <path d=\"M9 18h5\" /> <circle cx=\"16\" cy=\"18\" r=\"2\" />"});
 function icon(name, size = 18) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ICON_PATHS["circle-help"]}</svg>`;
 }
@@ -276,7 +295,7 @@ const USE_SERVER_SOURCES = location.protocol.startsWith("http");
 // Paste your Apps Script web app URL here (ends in /exec) to use Google instead of Vercel.
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbzKUGYPes8Hp9cc1P4zgFLmDbtANCx0hsKuV4qZctuHIT0tAfCNCgJbvVzjaCI3hDo2/exec";
 const API_BASE = APPS_SCRIPT_URL || "/api/proxy";
-const SERVER_SOURCE_PATHS = { waze: API_BASE + "?src=waze", kml: API_BASE + "?src=kml" };
+const SERVER_SOURCE_PATHS = { waze: API_BASE + "?src=waze", kml: API_BASE + "?src=kml", bus: API_BASE + "?src=bus" };
 const DEFAULT_SOURCES = { wazeUrl: "", kmlUrl: "", proxyUrl: "" };
 const PUBLIC_PROXIES = [
   "https://corsproxy.io/?url={url}",
@@ -319,7 +338,7 @@ const STORAGE_KEY = "mapa-cctv-waze-v1";
 function loadSettings() {
   const fresh = { sources: { ...DEFAULT_SOURCES }, layers: {}, hiddenAlertTypes: [], baseMap: "OpenStreetMap",
                   kmlInterval: "60", wazeInterval: "60", view: null, maxAgeHours: 0, minReliability: 0,
-                  showSource: { kml: true, waze: true }, watch: { accident: true, stopped: true }, notifySound: false, notifyBrowser: false, historySeeded: false };
+                  showSource: { kml: true, waze: true }, showBuses: { all: false, camera: true }, busInterval: "20", watch: { accident: true, stopped: true }, notifySound: false, notifyBrowser: false, historySeeded: false };
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
     if (saved) return { ...fresh, ...saved, sources: { ...fresh.sources, ...saved.sources } };
@@ -385,7 +404,7 @@ function kmlColorToCss(kmlColor) {
 function setStatus(id, message, isError) {
   const node = el(id); node.textContent = message;
   node.classList.toggle("err", !!isError);
-  node.classList.toggle("ok", !isError && !message.startsWith("Cargando") && message !== "Sin datos");
+  node.classList.toggle("ok", !isError && !message.startsWith("Cargando") && message !== "Sin datos" && message !== "Apagado");
 }
 const timeNow = () => new Date().toLocaleTimeString();
 
@@ -798,6 +817,134 @@ el("copyNames").onclick = async () => {
   flashMessage(ok ? `${names.length} nombres copiados` : "No se pudo copiar", ok);
 };
 
+// ---------------------------------------------------------------------------
+// Live buses (Intendencia de Montevideo). Markers persist between refreshes and glide to
+// their new position. Buses of the camera companies look different and sit above the rest.
+// Rules: "Todos los buses" shows every bus; "Buses con cámara" shows only the camera companies.
+// ---------------------------------------------------------------------------
+const CAMERA_BUS_COMPANIES = ["CUTCSA", "COETC", "COME", "UCOT"];
+const busGroup = L.layerGroup().addTo(map);
+const busEntries = new Map();   // bus id -> { marker, bus, camera, tweenToken }
+
+function pickLatLng(record) {
+  const location = record.location || record.position || record.geometry || {};
+  if (Array.isArray(location.coordinates)) return [Number(location.coordinates[1]), Number(location.coordinates[0])];   // GeoJSON is [lon, lat]
+  const lat = location.lat ?? location.latitude ?? location.y ?? record.lat ?? record.latitude;
+  const lng = location.lng ?? location.lon ?? location.longitude ?? location.x ?? record.lng ?? record.lon ?? record.longitude;
+  return [Number(lat), Number(lng)];
+}
+function parseBuses(data) {
+  const list = Array.isArray(data) ? data : (data.buses || data.data || data.items || data.results || data.features || []);
+  const buses = [];
+  list.forEach((record, index) => {
+    const source = record.properties ? { ...record.properties, location: record.geometry } : record;
+    const coords = pickLatLng(source);
+    if (!Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) return;
+    const company = String(source.company ?? source.companyName ?? source.empresa ?? source.operator ?? "");
+    buses.push({
+      id: String(source.id ?? source.busId ?? source.vehicleId ?? source.identifier ?? `${company}-${index}`),
+      line: String(source.line ?? source.lineName ?? source.lineVariantDescription ?? source.linea ?? ""),
+      destination: String(source.destination ?? source.subline ?? source.destino ?? ""),
+      company, coords,
+      speed: source.speed ?? source.velocidad,
+      timestamp: source.timestamp ?? source.time ?? source.lastUpdate,
+      camera: CAMERA_BUS_COMPANIES.some((name) => company.toUpperCase().includes(name))
+    });
+  });
+  return { buses, rawCount: list.length, sampleKeys: list[0] ? Object.keys(list[0]) : [] };
+}
+function busIcon(bus) {
+  const size = bus.camera ? 26 : 18;
+  return L.divIcon({ className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
+    html: `<div class="bus ${bus.camera ? "bus-camera" : "bus-other"}">${icon("bus", bus.camera ? 15 : 11)}` +
+          (bus.camera ? `<span class="cam">${icon("cctv", 10)}</span>` : "") + `</div>` });
+}
+function busPopup(bus) {
+  const color = bus.camera ? "#0f9d8a" : "#8b98a8";
+  const rows = [["Línea", bus.line], ["Destino", bus.destination], ["Empresa", bus.company],
+                ["Velocidad", bus.speed !== undefined && bus.speed !== null ? Math.round(Number(bus.speed)) + " km/h" : ""], ["Actualizado", bus.timestamp]]
+    .filter(([, value]) => value !== "" && value !== undefined)
+    .map(([label, value]) => `<tr><td><b>${escapeHtml(label)}</b></td><td>${escapeHtml(value)}</td></tr>`).join("");
+  return `<div class="pop-head"><span class="badge" style="background:${color}">${icon("bus", 16)}</span><b>${escapeHtml(bus.line ? "Línea " + bus.line : "Bus " + bus.id)}</b></div>` +
+         `<div class="popup-desc"><table>${rows}</table>${bus.camera ? "<div>📹 Empresa con cámara en vivo</div>" : ""}</div>` +
+         `<button class="copy-btn" data-copy="${escapeHtml(bus.id)}">${icon("copy", 14)}Copiar ID</button>`;
+}
+function glideMarker(entry, to) {
+  const from = entry.marker.getLatLng();
+  const token = (entry.tweenToken = (entry.tweenToken || 0) + 1);
+  if (Math.abs(from.lat - to[0]) > 0.01 || Math.abs(from.lng - to[1]) > 0.01) return entry.marker.setLatLng(to);   // big jump: no glide
+  const startTime = performance.now(), duration = 1800;
+  const step = (now) => {
+    if (entry.tweenToken !== token) return;
+    const progress = Math.min(1, (now - startTime) / duration);
+    entry.marker.setLatLng([from.lat + (to[0] - from.lat) * progress, from.lng + (to[1] - from.lng) * progress]);
+    if (progress < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function applyBusVisibility() {
+  let cameraCount = 0, allCount = 0;
+  busEntries.forEach((entry) => {
+    allCount++; if (entry.camera) cameraCount++;
+    const visible = settings.showBuses.all || (settings.showBuses.camera && entry.camera);
+    if (visible && !busGroup.hasLayer(entry.marker)) busGroup.addLayer(entry.marker);
+    if (!visible && busGroup.hasLayer(entry.marker)) busGroup.removeLayer(entry.marker);
+  });
+  el("countBusCamera").textContent = cameraCount || ""; el("countBusAll").textContent = allCount || "";
+}
+function updateBuses(buses) {
+  const seen = new Set();
+  buses.forEach((bus) => {
+    seen.add(bus.id);
+    let entry = busEntries.get(bus.id);
+    if (!entry) {
+      const marker = L.marker(bus.coords, { icon: busIcon(bus), zIndexOffset: bus.camera ? 600 : 200 });
+      marker.bindPopup(busPopup(bus), { maxWidth: 280 });
+      marker.bindTooltip(bus.line ? `${bus.line} · ${bus.company}` : bus.company, { sticky: true });
+      entry = { marker, bus, camera: bus.camera, tweenToken: 0 };
+      busEntries.set(bus.id, entry);
+    } else {
+      entry.bus = bus;
+      entry.marker.getPopup().setContent(busPopup(bus));
+      glideMarker(entry, bus.coords);
+    }
+  });
+  busEntries.forEach((entry, id) => {   // buses no longer reported disappear
+    if (!seen.has(id)) { busGroup.removeLayer(entry.marker); busEntries.delete(id); }
+  });
+  applyBusVisibility();
+}
+async function loadBuses(force) {
+  if (!settings.showBuses.all && !settings.showBuses.camera) return setStatus("busStatus", "Apagado");
+  if (!USE_SERVER_SOURCES) return setStatus("busStatus", "Requiere el servidor (Apps Script o Vercel)", true);
+  if (document.hidden && !force) return;   // save quota while the tab is in the background
+  setStatus("busStatus", "Cargando…");
+  try {
+    const { bytes } = await fetchBytes("", "bus");
+    const text = new TextDecoder("utf-8").decode(bytes);
+    let data;
+    try { data = JSON.parse(text); } catch (error) { throw new Error(text.slice(0, 160) || "respuesta vacía"); }
+    const { buses, rawCount, sampleKeys } = parseBuses(data);
+    if (rawCount && !buses.length) throw new Error("formato inesperado, campos: " + sampleKeys.join(", "));
+    updateBuses(buses);
+    setStatus("busStatus", `${buses.length} buses · ${timeNow()}`);
+  } catch (error) {
+    setStatus("busStatus", "No se pudo cargar: " + error.message, true);
+  }
+}
+fillSelect(el("busInterval"), [["10", "10 s"], ["20", "20 s"], ["30", "30 s"], ["60", "1 min"], ["0", "Apagado"]], settings.busInterval);
+el("busInterval").onchange = (event) => { settings.busInterval = event.target.value; saveSettings(); scheduleRefresh("bus", event.target.value, loadBuses); };
+el("refreshBus").onclick = () => loadBuses(true);
+[["showBusAll", "all"], ["showBusCamera", "camera"]].forEach(([id, key]) => {
+  el(id).checked = settings.showBuses[key];
+  el(id).onchange = (event) => {
+    settings.showBuses[key] = event.target.checked; saveSettings();
+    if (event.target.checked && !busEntries.size) loadBuses(true);
+    applyBusVisibility();
+    if (!settings.showBuses.all && !settings.showBuses.camera) setStatus("busStatus", "Apagado");
+  };
+});
+
 // Icons in static markup, and panel collapse
 document.querySelectorAll("[data-icon]").forEach((node) => { node.innerHTML = icon(node.dataset.icon, Number(node.dataset.size) || 18); });
 el("togglePanel").onclick = () => { document.body.classList.add("collapsed"); setTimeout(() => map.invalidateSize(), 50); };
@@ -949,6 +1096,8 @@ if (settings.view) { map.setView([settings.view[0], settings.view[1]], settings.
 loadKml(); loadWaze();
 scheduleRefresh("kml", settings.kmlInterval, loadKml);
 scheduleRefresh("waze", settings.wazeInterval, loadWaze);
+scheduleRefresh("bus", settings.busInterval, loadBuses);
+loadBuses();
 </script>
 </body>
 </html>
