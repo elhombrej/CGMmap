@@ -97,6 +97,11 @@
   .pin, .badge { display:grid; place-items:center; border-radius:50%; background:var(--pin, #12a8e8); color:#fff; border:2.5px solid #fff;
     box-shadow:0 2px 6px rgba(0,0,0,.35); }
   .badge { border-width:2px; box-shadow:none; }
+  .pin { position:relative; }
+  .pin.priority { border-width:3px; box-shadow:0 3px 10px rgba(0,0,0,.45); }
+  .pin.priority::after { content:""; position:absolute; inset:-7px; border-radius:50%; border:3px solid var(--pin); opacity:0; animation:pulse 1.8s ease-out infinite; pointer-events:none; }
+  @keyframes pulse { 0% { transform:scale(.6); opacity:.9; } 100% { transform:scale(1.25); opacity:0; } }
+  @media (prefers-reduced-motion: reduce) { .pin.priority::after { animation:none; opacity:.5; } }
   .dark-tiles { filter:invert(1) hue-rotate(180deg) brightness(.95) contrast(.9); }
 
   /* Leaflet restyle */
@@ -298,6 +303,8 @@ const WAZE_SUBTYPE_STYLES = {
   HAZARD_ON_ROAD_CAR_STOPPED: ["car", "Vehículo detenido"], HAZARD_ON_SHOULDER_CAR_STOPPED: ["car", "Vehículo detenido en banquina"], ACCIDENT_MAJOR: ["car-front", "Accidente grave"], ACCIDENT_MINOR: ["car-front", "Accidente leve"]
 };
 const STOPPED_SUBTYPES = ["HAZARD_ON_ROAD_CAR_STOPPED", "HAZARD_ON_SHOULDER_CAR_STOPPED"];
+// Visual hierarchy: crashes and stopped vehicles > other Waze reports > cameras.
+const PRIORITY_COLORS = { accident: "#e5252f", stopped: "#ea580c" };
 const JAM_LEVEL_COLORS = ["#16a34a", "#84cc16", "#eab308", "#f97316", "#dc2626", "#7f1d1d"];
 const DEFAULT_KML_COLOR = "#14a9e6";
 const DEFAULT_CAMERA_COLOR = "#3d5a73";   // muted slate: cameras are context, Waze is the focus
@@ -503,7 +510,8 @@ function parseWaze(data) {
       uuid: alert.uuid, street: alert.street || "", city: alert.city || "", description: alert.reportDescription || "",
       eventKind: type === "ACCIDENT" ? "accident" : STOPPED_SUBTYPES.includes(alert.subtype) ? "stopped" : null, pubMillis: Number(alert.pubMillis) || 0, reliability: Number(alert.reliability) || 0,
       name: [alertLabel, alert.street || alert.reportDescription].filter(Boolean).join(" · "),
-      color: style[1], icon: subtypeStyle ? subtypeStyle[0] : style[0], extra: {},
+      color: PRIORITY_COLORS[type === "ACCIDENT" ? "accident" : STOPPED_SUBTYPES.includes(alert.subtype) ? "stopped" : ""] || style[1],
+      icon: subtypeStyle ? subtypeStyle[0] : style[0], extra: {},
       html: fieldsTable([["Tipo", type], ["Subtipo", alert.subtype], ["Calle", alert.street], ["Ciudad", alert.city],
         ["Confiabilidad", alert.reliability], ["Calificación", alert.reportRating], ["Confianza", alert.confidence], ["👍", alert.nThumbsUp],
         ["Descripción", alert.reportDescription], ["Publicado", published(alert.pubMillis)]])
@@ -558,9 +566,9 @@ function popupContent(feature, iconName, color) {
          (feature.source === "kml" && feature.kind === "point"
            ? `<button class="copy-btn" data-copy="${escapeHtml(feature.name)}">${icon("copy", 14)}Copiar nombre</button>` : "");
 }
-function pinMarker(coords, iconName, color, size, zIndexOffset = 0, iconScale = 0.52) {
+function pinMarker(coords, iconName, color, size, zIndexOffset = 0, iconScale = 0.52, extraClass = "") {
   return L.marker(coords, { zIndexOffset, icon: L.divIcon({ className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-    html: `<div class="pin" style="--pin:${color};width:${size}px;height:${size}px">${icon(iconName, Math.round(size * iconScale))}</div>` }) });
+    html: `<div class="pin ${extraClass}" style="--pin:${color};width:${size}px;height:${size}px">${icon(iconName, Math.round(size * iconScale))}</div>` }) });
 }
 function renderFeature(feature) {
   const layerConfig = layerSetting(feature.layerId);
@@ -569,7 +577,8 @@ function renderFeature(feature) {
   const iconName = feature.icon || (feature.kind === "point" ? "cctv" : "route");
   let leafletLayer;
   if (isCamera) leafletLayer = pinMarker(feature.coords, iconName, color, 12 + layerConfig.size * 1.4, 0, 0.6);       // small, drawn underneath
-  else if (feature.kind === "point") leafletLayer = pinMarker(feature.coords, iconName, color, 16 + layerConfig.size * 1.5, 1000);   // Waze on top
+  else if (feature.kind === "point" && feature.eventKind) leafletLayer = pinMarker(feature.coords, iconName, color, 22 + layerConfig.size * 1.9, 3000, 0.56, "priority");   // crashes / stopped: biggest, pulsing, always on top
+  else if (feature.kind === "point") leafletLayer = pinMarker(feature.coords, iconName, color, 14 + layerConfig.size * 1.3, 1000);   // other Waze reports
   else if (feature.kind === "line") leafletLayer = L.polyline(feature.coords, { color, weight: Math.max(3, layerConfig.size / 2), opacity: 0.85, lineCap: "round" });
   else leafletLayer = L.polygon(feature.coords, { color, weight: 2, fillOpacity: 0.25 });
   leafletLayer.bindPopup(popupContent(feature, iconName, color), { maxWidth: 300 });
