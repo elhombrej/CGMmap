@@ -105,9 +105,14 @@
   @media (prefers-reduced-motion: reduce) { .pin.priority::after { animation:none; opacity:.5; } }
   .hint { font-size:12px; color:var(--muted); margin-top:8px; }
   /* Buses: square-ish badges so they read differently from round Waze/camera pins */
-  .bus { position:relative; display:grid; place-items:center; color:#fff; border:2px solid #fff; border-radius:6px; box-shadow:0 1px 4px rgba(0,0,0,.4); }
-  .bus-camera { background:#0f9d8a; width:26px; height:26px; }
-  .bus-other { background:#8b98a8; width:18px; height:18px; border-width:1.5px; }
+  .bus { position:relative; color:#fff; }
+  .bus-camera { --bus:#0f9d8a; width:30px; height:30px; }
+  .bus-other { --bus:#8b98a8; width:20px; height:20px; }
+  .bus-arrow { width:100%; height:100%; transform-origin:50% 50%; transition:transform .8s ease-out; filter:drop-shadow(0 1px 2px rgba(0,0,0,.55)); }
+  .bus-arrow svg { width:100%; height:100%; display:block; }
+  .bus-arrow .head { fill:var(--bus); stroke:#fff; stroke-width:1.6; stroke-linejoin:round; }
+  .bus-arrow .dot { display:none; fill:var(--bus); stroke:#fff; stroke-width:1.6; }
+  .bus-arrow.unknown .head { display:none; } .bus-arrow.unknown .dot { display:block; }   /* direction not known yet: plain dot */
   .bus .cam { position:absolute; right:-7px; top:-7px; width:15px; height:15px; border-radius:50%; background:#fff; color:#0f9d8a; display:grid; place-items:center; box-shadow:0 1px 3px rgba(0,0,0,.4); }
   .dark-tiles { filter:invert(1) hue-rotate(180deg) brightness(.95) contrast(.9); }
 
@@ -853,18 +858,57 @@ function parseBuses(data) {
   });
   return { buses: [...newestById.values()], rawCount: list.length, invalidPositions, sampleKeys: list[0] ? Object.keys(list[0]) : [] };
 }
-function busIcon(bus) {
-  const size = bus.camera ? 26 : 18;
+// Direction: the API gives no heading, so it is computed from how a bus moved between updates.
+const busLastSeen = new Map();   // bus id -> { anchor: [lat, lng], heading, time }; survives between sessions (memory only)
+const MIN_MOVE_METERS = 15;      // ignore GPS jitter
+const COMPASS_NAMES = ["N", "NE", "E", "SE", "S", "SO", "O", "NO"];
+const compassLabel = (heading) => `${COMPASS_NAMES[Math.round(heading / 45) % 8]} (${Math.round(heading)}°)`;
+function distanceMeters([lat1, lng1], [lat2, lng2]) {
+  const metersPerDegree = 111320;
+  return Math.hypot((lat2 - lat1) * metersPerDegree, (lng2 - lng1) * metersPerDegree * Math.cos(lat1 * Math.PI / 180));
+}
+function bearingDegrees([lat1, lng1], [lat2, lng2]) {   // 0 = north, clockwise
+  const rad = Math.PI / 180, deltaLng = (lng2 - lng1) * rad;
+  const y = Math.sin(deltaLng) * Math.cos(lat2 * rad);
+  const x = Math.cos(lat1 * rad) * Math.sin(lat2 * rad) - Math.sin(lat1 * rad) * Math.cos(lat2 * rad) * Math.cos(deltaLng);
+  return (Math.atan2(y, x) / rad + 360) % 360;
+}
+function updateBusHeading(bus) {
+  const now = Date.now(), previous = busLastSeen.get(bus.id);
+  let anchor = bus.coords, heading = null;
+  if (previous && now - previous.time < 5 * 60000) {
+    anchor = previous.anchor; heading = previous.heading;
+    if (distanceMeters(previous.anchor, bus.coords) >= MIN_MOVE_METERS) { heading = bearingDegrees(previous.anchor, bus.coords); anchor = bus.coords; }
+  }
+  busLastSeen.set(bus.id, { anchor, heading, time: now });
+  bus.heading = heading;
+}
+function busIcon(bus, angle, known) {
+  const size = bus.camera ? 30 : 20;
   return L.divIcon({ className: "", iconSize: [size, size], iconAnchor: [size / 2, size / 2],
-    html: `<div class="bus ${bus.camera ? "bus-camera" : "bus-other"}">${icon("bus", bus.camera ? 15 : 11)}` +
+    html: `<div class="bus ${bus.camera ? "bus-camera" : "bus-other"}">` +
+          `<div class="bus-arrow ${known ? "" : "unknown"}" style="transform:rotate(${angle}deg)">` +
+          `<svg viewBox="0 0 24 24"><path class="head" d="M12 2 L21 21 L12 16.5 L3 21 Z"/><circle class="dot" cx="12" cy="12" r="6"/></svg></div>` +
           (bus.camera ? `<span class="cam">${icon("cctv", 10)}</span>` : "") + `</div>` });
+}
+// Turns the arrow smoothly by the shortest way round (350° -> 10° is a 20° turn, not 340°).
+function applyBusHeading(entry) {
+  const heading = entry.bus.heading;
+  if (heading === null || heading === undefined) return;
+  const wasKnown = entry.known;
+  entry.angle = wasKnown ? entry.angle + (((heading - entry.angle + 540) % 360) - 180) : heading;
+  entry.known = true;
+  const arrow = entry.marker.getElement() && entry.marker.getElement().querySelector(".bus-arrow");
+  if (!arrow) return entry.marker.setIcon(busIcon(entry.bus, entry.angle, true));   // marker not on the map right now
+  if (!wasKnown) { arrow.style.transition = "none"; arrow.classList.remove("unknown"); arrow.style.transform = `rotate(${entry.angle}deg)`; void arrow.offsetWidth; arrow.style.transition = ""; }
+  else arrow.style.transform = `rotate(${entry.angle}deg)`;
 }
 function busPopup(bus) {
   const color = bus.camera ? "#0f9d8a" : "#8b98a8";
   const age = bus.time ? Math.max(0, Math.round((Date.now() - bus.time) / 1000)) : null;
   const rows = [["Línea", bus.line], ["Recorrido", bus.subline], ["Origen", bus.origin], ["Destino", bus.destination], ["Empresa", bus.company],
                 ["Coche", bus.busNumber], ["Velocidad", bus.speed !== undefined && bus.speed !== null ? Math.round(Number(bus.speed)) + " km/h" : ""],
-                ["Último dato", age === null ? "" : age < 90 ? `hace ${age} s` : `hace ${Math.round(age / 60)} min`]]
+                ["Rumbo", bus.heading === null || bus.heading === undefined ? "" : compassLabel(bus.heading)], ["Último dato", age === null ? "" : age < 90 ? `hace ${age} s` : `hace ${Math.round(age / 60)} min`]]
     .filter(([, value]) => value !== "" && value !== undefined)
     .map(([label, value]) => `<tr><td><b>${escapeHtml(label)}</b></td><td>${escapeHtml(value)}</td></tr>`).join("");
   return `<div class="pop-head"><span class="badge" style="background:${color}">${icon("bus", 16)}</span><b>${escapeHtml(bus.line ? "Línea " + bus.line : "Bus " + bus.id)}</b></div>` +
@@ -898,22 +942,26 @@ function updateBuses(buses) {
   const seen = new Set();
   buses.forEach((bus) => {
     seen.add(bus.id);
+    updateBusHeading(bus);
     let entry = busEntries.get(bus.id);
     if (!entry) {
-      const marker = L.marker(bus.coords, { icon: busIcon(bus), zIndexOffset: bus.camera ? 600 : 200 });
+      const known = bus.heading !== null, angle = bus.heading ?? 0;
+      const marker = L.marker(bus.coords, { icon: busIcon(bus, angle, known), zIndexOffset: bus.camera ? 600 : 200 });
       marker.bindPopup(busPopup(bus), { maxWidth: 280 });
       marker.bindTooltip(bus.line ? `${bus.line} · ${bus.company}` : bus.company, { sticky: true });
-      entry = { marker, bus, camera: bus.camera, tweenToken: 0 };
+      entry = { marker, bus, camera: bus.camera, tweenToken: 0, angle, known };
       busEntries.set(bus.id, entry);
     } else {
       entry.bus = bus;
       entry.marker.getPopup().setContent(busPopup(bus));
       glideMarker(entry, bus.coords);
+      applyBusHeading(entry);
     }
   });
   busEntries.forEach((entry, id) => {   // buses no longer reported disappear
     if (!seen.has(id)) { busGroup.removeLayer(entry.marker); busEntries.delete(id); }
   });
+  if (busLastSeen.size > 3000) { const cutoff = Date.now() - 10 * 60000; busLastSeen.forEach((value, key) => { if (value.time < cutoff) busLastSeen.delete(key); }); }
   applyBusVisibility();
 }
 async function loadBuses(force) {
