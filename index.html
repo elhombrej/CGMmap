@@ -813,26 +813,43 @@ function pickLatLng(record) {
   const lng = location.lng ?? location.lon ?? location.longitude ?? location.x ?? record.lng ?? record.lon ?? record.longitude;
   return [Number(lat), Number(lng)];
 }
+// "2026-11-21T20:15:06.000-03" has an offset without minutes, which browsers reject: make it "-03:00".
+function parseBusTime(text) {
+  const millis = Date.parse(String(text || "").replace(/([+-]\d\d)$/, "$1:00"));
+  return Number.isFinite(millis) ? millis : 0;
+}
+const isValidPosition = ([lat, lng]) => Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180 && !(lat === 0 && lng === 0);
+// Optional exact list of buses that carry a live camera, as "COMPANY-busId" (e.g. "CUTCSA-446").
+// While the list is empty, every bus of the four camera companies counts as a camera bus.
+const CAMERA_BUS_IDS = [];
+function isCameraBus(company, busId) {
+  if (CAMERA_BUS_IDS.length) return CAMERA_BUS_IDS.includes(`${company.toUpperCase()}-${busId}`);
+  return CAMERA_BUS_COMPANIES.some((name) => company.toUpperCase().includes(name));
+}
 function parseBuses(data) {
   const list = Array.isArray(data) ? data : (data.buses || data.data || data.items || data.results || data.features || []);
-  const buses = [];
+  const newestById = new Map();
+  let invalidPositions = 0;
   list.forEach((record, index) => {
     const source = record.properties ? { ...record.properties, location: record.geometry } : record;
     const coords = pickLatLng(source);
-    if (!Number.isFinite(coords[0]) || !Number.isFinite(coords[1])) return;
+    if (!isValidPosition(coords)) { invalidPositions++; return; }   // GPS glitches like [0,0] or [-258,-258]
     const rawCompany = source.company ?? source.companyName ?? source.empresa ?? source.operador ?? source.operator ?? source.agency ?? "";
     const company = String(typeof rawCompany === "object" && rawCompany ? (rawCompany.name ?? rawCompany.nombre ?? rawCompany.description ?? "") : rawCompany);
-    buses.push({
-      id: String(source.id ?? source.busId ?? source.vehicleId ?? source.identifier ?? `${company}-${index}`),
+    const busNumber = source.busId ?? source.id ?? source.vehicleId ?? source.identifier ?? index;
+    const bus = {
+      id: `${company.toUpperCase()}-${busNumber}`,   // busId alone repeats across companies
+      busNumber, company, coords,
       line: String(source.line ?? source.lineName ?? source.lineVariantDescription ?? source.linea ?? ""),
-      destination: String(source.destination ?? source.subline ?? source.destino ?? ""),
-      company, coords,
-      speed: source.speed ?? source.velocidad,
-      timestamp: source.timestamp ?? source.time ?? source.lastUpdate,
-      camera: CAMERA_BUS_COMPANIES.some((name) => company.toUpperCase().includes(name))
-    });
+      origin: String(source.origin ?? ""), destination: String(source.destination ?? source.destino ?? ""),
+      subline: String(source.subline ?? ""), speed: source.speed ?? source.velocidad,
+      time: parseBusTime(source.timestamp ?? source.time ?? source.lastUpdate),
+      camera: isCameraBus(company, busNumber)
+    };
+    const previous = newestById.get(bus.id);
+    if (!previous || bus.time >= previous.time) newestById.set(bus.id, bus);   // a bus can appear twice: keep the newest record
   });
-  return { buses, rawCount: list.length, sampleKeys: list[0] ? Object.keys(list[0]) : [] };
+  return { buses: [...newestById.values()], rawCount: list.length, invalidPositions, sampleKeys: list[0] ? Object.keys(list[0]) : [] };
 }
 function busIcon(bus) {
   const size = bus.camera ? 26 : 18;
@@ -842,13 +859,15 @@ function busIcon(bus) {
 }
 function busPopup(bus) {
   const color = bus.camera ? "#0f9d8a" : "#8b98a8";
-  const rows = [["Línea", bus.line], ["Destino", bus.destination], ["Empresa", bus.company],
-                ["Velocidad", bus.speed !== undefined && bus.speed !== null ? Math.round(Number(bus.speed)) + " km/h" : ""], ["Actualizado", bus.timestamp]]
+  const age = bus.time ? Math.max(0, Math.round((Date.now() - bus.time) / 1000)) : null;
+  const rows = [["Línea", bus.line], ["Recorrido", bus.subline], ["Origen", bus.origin], ["Destino", bus.destination], ["Empresa", bus.company],
+                ["Coche", bus.busNumber], ["Velocidad", bus.speed !== undefined && bus.speed !== null ? Math.round(Number(bus.speed)) + " km/h" : ""],
+                ["Último dato", age === null ? "" : age < 90 ? `hace ${age} s` : `hace ${Math.round(age / 60)} min`]]
     .filter(([, value]) => value !== "" && value !== undefined)
     .map(([label, value]) => `<tr><td><b>${escapeHtml(label)}</b></td><td>${escapeHtml(value)}</td></tr>`).join("");
   return `<div class="pop-head"><span class="badge" style="background:${color}">${icon("bus", 16)}</span><b>${escapeHtml(bus.line ? "Línea " + bus.line : "Bus " + bus.id)}</b></div>` +
          `<div class="popup-desc"><table>${rows}</table>${bus.camera ? "<div>📹 Empresa con cámara en vivo</div>" : ""}</div>` +
-         `<button class="copy-btn" data-copy="${escapeHtml(bus.id)}">${icon("copy", 14)}Copiar ID</button>`;
+         `<button class="copy-btn" data-copy="${escapeHtml(bus.company + " " + bus.busNumber)}">${icon("copy", 14)}Copiar coche</button>`;
 }
 function glideMarker(entry, to) {
   const from = entry.marker.getLatLng();
@@ -906,11 +925,11 @@ async function loadBuses(force) {
     const text = new TextDecoder("utf-8").decode(bytes);
     let data;
     try { data = JSON.parse(text); } catch (error) { throw new Error(text.slice(0, 160) || "respuesta vacía"); }
-    const { buses, rawCount, sampleKeys } = parseBuses(data);
+    const { buses, rawCount, invalidPositions, sampleKeys } = parseBuses(data);
     if (rawCount && !buses.length) throw new Error("formato inesperado, campos: " + sampleKeys.join(", "));
     updateBuses(buses);
     const cameraCount = buses.filter((bus) => bus.camera).length;
-    let summary = `${buses.length} buses (${cameraCount} con cámara) · ${timeNow()}`;
+    let summary = `${buses.length} buses (${cameraCount} con cámara) · ${timeNow()}` + (invalidPositions ? ` · ${invalidPositions} sin GPS válido` : "");
     if (buses.length && !cameraCount) {   // help diagnose: show what the API calls the companies
       const companies = [...new Set(buses.map((bus) => bus.company).filter(Boolean))].slice(0, 6);
       summary += companies.length ? " · empresas vistas: " + companies.join(", ") : " · sin campo de empresa; campos: " + sampleKeys.join(", ");
