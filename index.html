@@ -1121,6 +1121,24 @@ function ttTableText() {
   // Always just the data: time, then one value per route (no header row).
   return ttVisibleRows().map((slot) => `${TT_SLOT_LABELS[slot]} ${dayLabel}\t` + columns.map((c) => ttFormat(c.values[slot])).join("\t")).join("\n");
 }
+// The same rows as an HTML table whose cells are marked as TEXT for Excel (mso-number-format), so pasting keeps
+// "25:41" as 25:41 instead of turning it into a clock time or a date. Plain tab-separated text goes along as fallback.
+function ttTableHtml() {
+  if (!ttState.data) return "";
+  const columns = ttState.data.columns, dayLabel = ttState.data.day.replace(/-/g, "/");
+  const cell = (text, align) => `<td style="mso-number-format:'\\@';text-align:${align}">${escapeHtml(text)}</td>`;
+  const rows = ttVisibleRows().map((slot) => "<tr>" + cell(`${TT_SLOT_LABELS[slot]} ${dayLabel}`, "left") + columns.map((c) => cell(ttFormat(c.values[slot]), "right")).join("") + "</tr>");
+  return `<table><tbody>${rows.join("")}</tbody></table>`;
+}
+async function copyTableRich(plainText, html) {
+  try {
+    if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+      await navigator.clipboard.write([new ClipboardItem({ "text/html": new Blob([html], { type: "text/html" }), "text/plain": new Blob([plainText], { type: "text/plain" }) })]);
+      return true;
+    }
+  } catch (error) { /* fall back to plain text below */ }
+  return copyText(plainText);
+}
 async function loadTravelTimes(refresh) {
   if (!USE_SERVER_SOURCES) return setStatus("ttStatus", "Requiere el servidor (Apps Script o Vercel)", true);
   setStatus("ttStatus", "Cargando…");
@@ -1162,8 +1180,8 @@ el("ttTo").onchange = (event) => { ttState.toUser = event.target.value; renderTr
 el("ttCopy").onclick = async () => {
   const text = ttTableText();
   if (!text) return flashMessage("No hay datos para copiar", false);
-  const ok = await copyText(text);
-  flashMessage(ok ? `Tabla copiada (${text.split("\n").length} filas)` : "No se pudo copiar", ok);
+  const ok = await copyTableRich(text, ttTableHtml());
+  flashMessage(ok ? `Tabla copiada como texto (${text.split("\n").length} filas)` : "No se pudo copiar", ok);
 };
 
 // Icons in static markup, and panel collapse
