@@ -304,7 +304,6 @@
         <button class="btn secondary" id="ttToday">Hoy</button>
         <label>Desde <select id="ttFrom"></select></label>
         <label>Hasta <select id="ttTo"></select></label>
-        <label><input type="checkbox" id="ttHeader"> Con encabezado</label>
         <span class="grow"></span>
         <button class="btn secondary" id="ttRefresh"><span data-icon="refresh-cw" data-size="16"></span>Actualizar</button>
         <button class="btn" id="ttCopy"><span data-icon="copy" data-size="16"></span>Copiar tabla</button>
@@ -1119,9 +1118,8 @@ function renderTravelTimes() {
 function ttTableText() {
   if (!ttState.data) return "";
   const columns = ttState.data.columns, dayLabel = ttState.data.day.replace(/-/g, "/");
-  const lines = ttVisibleRows().map((slot) => `${TT_SLOT_LABELS[slot]} ${dayLabel}\t` + columns.map((c) => ttFormat(c.values[slot])).join("\t"));
-  if (el("ttHeader").checked) lines.unshift(["Time", ...columns.map((c) => c.name || "VMS " + c.code)].join("\t"));
-  return lines.join("\n");
+  // Always just the data: time, then one value per route (no header row).
+  return ttVisibleRows().map((slot) => `${TT_SLOT_LABELS[slot]} ${dayLabel}\t` + columns.map((c) => ttFormat(c.values[slot])).join("\t")).join("\n");
 }
 async function loadTravelTimes(refresh) {
   if (!USE_SERVER_SOURCES) return setStatus("ttStatus", "Requiere el servidor (Apps Script o Vercel)", true);
@@ -1161,7 +1159,6 @@ el("ttToday").onclick = () => setTravelDay(montevideoToday());
 el("ttRefresh").onclick = () => loadTravelTimes(true);
 el("ttFrom").onchange = renderTravelTimes;
 el("ttTo").onchange = (event) => { ttState.toUser = event.target.value; renderTravelTimes(); };
-el("ttHeader").checked = false;
 el("ttCopy").onclick = async () => {
   const text = ttTableText();
   if (!text) return flashMessage("No hay datos para copiar", false);
