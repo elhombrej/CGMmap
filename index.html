@@ -340,7 +340,7 @@ function icon(name, size = 18) {
 // WAZE_URL / KML_URL environment variables, and the page only calls /api/proxy.
 const USE_SERVER_SOURCES = location.protocol.startsWith("http");
 // Paste your Apps Script web app URL here (ends in /exec) to use Google instead of Vercel.
-const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxrit7ChYXawfT_1j-EhQn6yUQ-VwdGRbG2sUgWZlO6WlIHYMXj196TRaL7KQC8mHEG/exec";
+const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby3aQe_cgGg_FW6R0NpP5Lf-y9cFFsrs9sGrQZC-koSa0w9U3Bme3osiyXZORSZiGqH/exec";
 const API_BASE = APPS_SCRIPT_URL || "/api/proxy";
 const SERVER_SOURCE_PATHS = { waze: API_BASE + "?src=waze", kml: API_BASE + "?src=kml", bus: API_BASE + "?src=bus", tt: API_BASE + "?src=tt" };
 const DEFAULT_SOURCES = { wazeUrl: "", kmlUrl: "", proxyUrl: "" };
