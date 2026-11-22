@@ -134,6 +134,32 @@
   .leaflet-bar a { background:var(--card); color:var(--text); border:none; width:38px; height:38px; line-height:38px; }
   .leaflet-control-attribution { border-radius:10px 0 0 0; }
 
+  /* Travel-times table (Acyclica style): square corners, docked bottom-right */
+  #ttBtn { position:absolute; z-index:1000; right:12px; bottom:132px; box-shadow:var(--shadow); }
+  body.drawer-open #ttBtn { right:362px; }
+  body.tt-open #ttBtn, body.tt-open .leaflet-bottom { display:none; }
+  #ttPanel { position:absolute; z-index:1050; left:360px; right:0; bottom:0; height:58%; display:flex; flex-direction:column; background:var(--card);
+    box-shadow:0 -4px 16px rgba(20,60,90,.22); }
+  #ttPanel[hidden] { display:none; }
+  body.collapsed #ttPanel { left:0; } body.drawer-open #ttPanel { right:350px; }
+  .tt-head { padding:10px 14px 4px; border-bottom:1px solid var(--line); }
+  .tt-title { display:flex; align-items:center; gap:8px; font-weight:800; font-size:15px; margin-bottom:6px; }
+  .tt-controls { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+  .tt-controls label { display:flex; align-items:center; gap:6px; margin:0; }
+  .tt-controls input[type=date], .tt-controls select { width:auto; padding:6px 10px; }
+  .tt-controls .grow { flex:1; }
+  .tt-scroll { overflow:auto; flex:1; }
+  #ttTable { border-collapse:separate; border-spacing:0; font-variant-numeric:tabular-nums; user-select:text; }
+  #ttTable th, #ttTable td { padding:8px 12px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--line); }
+  #ttTable thead th { position:sticky; top:0; z-index:2; background:var(--card); vertical-align:bottom; max-width:130px; white-space:normal; font-size:12px; line-height:1.2; }
+  #ttTable thead th b { display:block; font-size:14px; }
+  #ttTable thead th small { font-weight:600; color:var(--muted); }
+  #ttTable th:first-child, #ttTable td:first-child { position:sticky; left:0; z-index:1; background:var(--card); text-align:left; font-weight:700; }
+  #ttTable thead th:first-child { z-index:3; }
+  #ttTable tbody tr:nth-child(even) td { background:var(--bg); }
+  #ttTable td.empty { color:var(--muted); }
+  #ttTable th.bad { color:var(--bad); }
+  @media (max-width:700px) { #ttPanel { left:0; right:0; height:70%; } body.drawer-open #ttPanel { right:0; } #ttBtn { bottom:150px; } }
   /* Right drawer: accidents and stopped vehicles */
   #drawer { position:absolute; z-index:1000; top:0; right:0; bottom:0; width:350px; max-width:100%; overflow-y:auto;
     padding:0 0 12px; background:var(--bg); border-radius:0; box-shadow:-2px 0 12px rgba(20,60,90,.18);
@@ -266,6 +292,27 @@
     <div class="row mt" style="margin:12px 12px 0"><button class="btn secondary" id="clearHistory"><span data-icon="trash-2" data-size="16"></span>Borrar historial</button></div>
   </aside>
   <div id="toasts"></div>
+  <button class="btn" id="ttBtn"><span data-icon="clock" data-size="16"></span>Tiempos de viaje</button>
+  <section id="ttPanel" hidden>
+    <header class="tt-head">
+      <div class="tt-title"><span class="ti card-title" style="margin:0"><span class="ti" data-icon="clock" data-size="16"></span></span>Tiempos de viaje · Strength (mm:ss) cada 15 min
+        <span class="grow" style="flex:1"></span><button class="icon-btn" id="ttClose" title="Cerrar" data-icon="x" data-size="20"></button></div>
+      <div class="tt-controls">
+        <button class="icon-btn" id="ttPrev" title="Día anterior" data-icon="chevron-left" data-size="20"></button>
+        <input type="date" id="ttDay">
+        <button class="icon-btn" id="ttNext" title="Día siguiente" data-icon="chevron-right" data-size="20"></button>
+        <button class="btn secondary" id="ttToday">Hoy</button>
+        <label>Desde <select id="ttFrom"></select></label>
+        <label>Hasta <select id="ttTo"></select></label>
+        <label><input type="checkbox" id="ttHeader"> Con encabezado</label>
+        <span class="grow"></span>
+        <button class="btn secondary" id="ttRefresh"><span data-icon="refresh-cw" data-size="16"></span>Actualizar</button>
+        <button class="btn" id="ttCopy"><span data-icon="copy" data-size="16"></span>Copiar tabla</button>
+      </div>
+      <div class="status" id="ttStatus" style="margin:6px 0 4px"></div>
+    </header>
+    <div class="tt-scroll"><table id="ttTable"></table></div>
+  </section>
   <button class="icon-btn" id="openPanel" title="Mostrar panel" data-icon="layers" data-size="22"></button>
     <div id="map"></div>
 </div>
@@ -280,6 +327,7 @@ const ICON_PATHS = {"cctv": "<path d=\"M16.75 12h3.632a1 1 0 0 1 .894 1.447l-2.0
 Object.assign(ICON_PATHS, {"bell": "<path d=\"M10.268 21a2 2 0 0 0 3.464 0\" /> <path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\" />", "history": "<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /> <path d=\"M3 3v5h5\" /> <path d=\"M12 7v5l4 2\" />", "x": "<path d=\"M18 6 6 18\" /> <path d=\"m6 6 12 12\" />", "car": "<path d=\"M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2\" /> <circle cx=\"7\" cy=\"17\" r=\"2\" /> <path d=\"M9 17h6\" /> <circle cx=\"17\" cy=\"17\" r=\"2\" />", "locate-fixed": "<line x1=\"2\" x2=\"5\" y1=\"12\" y2=\"12\" /> <line x1=\"19\" x2=\"22\" y1=\"12\" y2=\"12\" /> <line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"5\" /> <line x1=\"12\" x2=\"12\" y1=\"19\" y2=\"22\" /> <circle cx=\"12\" cy=\"12\" r=\"7\" /> <circle cx=\"12\" cy=\"12\" r=\"3\" />", "trash-2": "<path d=\"M3 6h18\" /> <path d=\"M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6\" /> <path d=\"M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2\" /> <line x1=\"10\" x2=\"10\" y1=\"11\" y2=\"17\" /> <line x1=\"14\" x2=\"14\" y1=\"11\" y2=\"17\" />"});
 Object.assign(ICON_PATHS, {"copy": "<rect width=\"14\" height=\"14\" x=\"8\" y=\"8\" rx=\"2\" ry=\"2\" /> <path d=\"M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2\" />", "check": "<path d=\"M20 6 9 17l-5-5\" />"});
 Object.assign(ICON_PATHS, {"bus": "<path d=\"M8 6v6\" /> <path d=\"M15 6v6\" /> <path d=\"M2 12h19.6\" /> <path d=\"M18 18h3s.5-1.7.8-2.8c.1-.4.2-.8.2-1.2 0-.4-.1-.8-.2-1.2l-1.4-5C20.1 6.8 19.1 6 18 6H4a2 2 0 0 0-2 2v10h3\" /> <circle cx=\"7\" cy=\"18\" r=\"2\" /> <path d=\"M9 18h5\" /> <circle cx=\"16\" cy=\"18\" r=\"2\" />"});
+Object.assign(ICON_PATHS, {"chevron-right": "<path d=\"m9 18 6-6-6-6\" />", "calendar": "<path d=\"M8 2v4\" /> <path d=\"M16 2v4\" /> <rect width=\"18\" height=\"18\" x=\"3\" y=\"4\" rx=\"2\" /> <path d=\"M3 10h18\" />"});
 function icon(name, size = 18) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ICON_PATHS["circle-help"]}</svg>`;
 }
@@ -294,7 +342,7 @@ const USE_SERVER_SOURCES = location.protocol.startsWith("http");
 // Paste your Apps Script web app URL here (ends in /exec) to use Google instead of Vercel.
 const APPS_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxrit7ChYXawfT_1j-EhQn6yUQ-VwdGRbG2sUgWZlO6WlIHYMXj196TRaL7KQC8mHEG/exec";
 const API_BASE = APPS_SCRIPT_URL || "/api/proxy";
-const SERVER_SOURCE_PATHS = { waze: API_BASE + "?src=waze", kml: API_BASE + "?src=kml", bus: API_BASE + "?src=bus" };
+const SERVER_SOURCE_PATHS = { waze: API_BASE + "?src=waze", kml: API_BASE + "?src=kml", bus: API_BASE + "?src=bus", tt: API_BASE + "?src=tt" };
 const DEFAULT_SOURCES = { wazeUrl: "", kmlUrl: "", proxyUrl: "" };
 const PUBLIC_PROXIES = [
   "https://corsproxy.io/?url={url}",
@@ -411,9 +459,9 @@ const timeNow = () => new Date().toLocaleTimeString();
 // ---------------------------------------------------------------------------
 // Network: try direct first, then user proxy, then public proxies.
 // ---------------------------------------------------------------------------
-async function fetchBytes(url, serverSourceName) {
+async function fetchBytes(url, serverSourceName, extraQuery = "") {
   // Server mode: one same-origin call, no fallbacks, so nothing sensitive leaves the site.
-  if (USE_SERVER_SOURCES) url = SERVER_SOURCE_PATHS[serverSourceName];
+  if (USE_SERVER_SOURCES) url = SERVER_SOURCE_PATHS[serverSourceName] + extraQuery;
   const attempts = [url];
   const templates = USE_SERVER_SOURCES ? [] : [settings.sources.proxyUrl, ...PUBLIC_PROXIES].filter(Boolean);
   templates.forEach((template) => attempts.push(template.replace("{url}", encodeURIComponent(url))));
@@ -1032,6 +1080,94 @@ function tickBusSession() {
   };
 });
 document.addEventListener("visibilitychange", () => { if (busesActive() && !document.hidden) loadBuses(true); });   // fresh data when coming back to the tab
+
+// ---------------------------------------------------------------------------
+// Travel-times table (Acyclica): one Strength value (mm:ss) per route per 15 minutes, for one local day.
+// The backend (Apps Script) holds the Acyclica key, fetches the 14 routes and averages them per slot.
+// ---------------------------------------------------------------------------
+const TT_SLOT_LABELS = Array.from({ length: 96 }, (_, i) => String(Math.floor(i / 4)).padStart(2, "0") + ":" + String((i % 4) * 15).padStart(2, "0"));
+const ttState = { day: null, data: null, toUser: null };
+const montevideoToday = () => new Date(Date.now() - 3 * 3600000).toISOString().slice(0, 10);   // Uruguay is UTC-3 all year
+function shiftDay(day, delta) { const date = new Date(day + "T00:00:00Z"); date.setUTCDate(date.getUTCDate() + delta); return date.toISOString().slice(0, 10); }
+function ttFormat(millis) {
+  if (millis === null || millis === undefined) return "—";
+  const total = Math.round(millis / 1000);
+  return Math.floor(total / 60) + ":" + String(total % 60).padStart(2, "0");
+}
+// Rows to show: from "Desde" to "Hasta" (default: the last slot that has data).
+function ttVisibleRows() {
+  if (!ttState.data) return [];
+  const columns = ttState.data.columns;
+  const lastWithData = TT_SLOT_LABELS.reduce((last, _, slot) => (columns.some((c) => c.values[slot] !== null && c.values[slot] !== undefined) ? slot : last), 0);
+  const from = TT_SLOT_LABELS.indexOf(el("ttFrom").value);
+  const to = ttState.toUser === null ? lastWithData : TT_SLOT_LABELS.indexOf(ttState.toUser);
+  el("ttTo").value = TT_SLOT_LABELS[to];
+  const rows = [];
+  for (let slot = Math.max(0, from); slot <= to; slot++) rows.push(slot);
+  return rows;
+}
+function renderTravelTimes() {
+  const table = el("ttTable");
+  if (!ttState.data) { table.innerHTML = ""; return; }
+  const columns = ttState.data.columns, dayLabel = ttState.data.day.replace(/-/g, "/");
+  const head = `<thead><tr><th>Time</th>${columns.map((c) => `<th class="${c.error ? "bad" : ""}" title="${escapeHtml(c.error || c.name)}"><b>${escapeHtml(c.code)}</b><small>${escapeHtml((c.name || "").replace(/^VMS\s*\S+\s*/i, ""))}</small></th>`).join("")}</tr></thead>`;
+  const body = ttVisibleRows().map((slot) => `<tr><td>${TT_SLOT_LABELS[slot]} ${dayLabel}</td>${columns.map((c) => {
+    const value = c.values[slot]; return `<td class="${value === null || value === undefined ? "empty" : ""}">${ttFormat(value)}</td>`; }).join("")}</tr>`).join("");
+  table.innerHTML = head + `<tbody>${body}</tbody>`;
+}
+// Same layout as the Acyclica screen, tab-separated so it pastes straight into Excel.
+function ttTableText() {
+  if (!ttState.data) return "";
+  const columns = ttState.data.columns, dayLabel = ttState.data.day.replace(/-/g, "/");
+  const lines = ttVisibleRows().map((slot) => `${TT_SLOT_LABELS[slot]} ${dayLabel}\t` + columns.map((c) => ttFormat(c.values[slot])).join("\t"));
+  if (el("ttHeader").checked) lines.unshift(["Time", ...columns.map((c) => c.name || "VMS " + c.code)].join("\t"));
+  return lines.join("\n");
+}
+async function loadTravelTimes(refresh) {
+  if (!USE_SERVER_SOURCES) return setStatus("ttStatus", "Requiere el servidor (Apps Script o Vercel)", true);
+  setStatus("ttStatus", "Cargando…");
+  const requestedDay = ttState.day;
+  try {
+    const { bytes } = await fetchBytes("", "tt", `&day=${requestedDay}${refresh ? "&refresh=1" : ""}`);
+    const text = new TextDecoder("utf-8").decode(bytes);
+    let data;
+    try { data = JSON.parse(text); } catch (error) { throw new Error(text.slice(0, 160) || "respuesta vacía"); }
+    if (requestedDay !== ttState.day) return;   // the user already moved to another day
+    ttState.data = data; ttState.loadedAt = Date.now();
+    renderTravelTimes();
+    const problems = data.columns.filter((c) => c.error).map((c) => `${c.code}: ${c.error}`);
+    setStatus("ttStatus", `${data.columns.length - problems.length}/${data.columns.length} rutas · actualizado ${new Date(data.generatedAt).toLocaleTimeString()}` + (problems.length ? " · " + problems.join(", ") : ""), problems.length === data.columns.length);
+  } catch (error) { setStatus("ttStatus", "No se pudo cargar: " + error.message, true); }
+}
+function setTravelDay(day) {
+  const today = montevideoToday();
+  ttState.day = day > today ? today : day;   // no future days
+  ttState.toUser = null; ttState.data = null;
+  el("ttDay").value = ttState.day; el("ttDay").max = today; el("ttNext").disabled = ttState.day >= today;
+  renderTravelTimes(); loadTravelTimes(false);
+}
+fillSelect(el("ttFrom"), TT_SLOT_LABELS.map((label) => [label, label]), "00:00");
+fillSelect(el("ttTo"), TT_SLOT_LABELS.map((label) => [label, label]), "23:45");
+el("ttBtn").onclick = () => {
+  document.body.classList.add("tt-open"); el("ttPanel").hidden = false;
+  const stale = !ttState.data || (ttState.day === montevideoToday() && Date.now() - ttState.loadedAt > 4 * 60000);
+  if (!ttState.day) setTravelDay(montevideoToday()); else if (stale) loadTravelTimes(false);
+};
+el("ttClose").onclick = () => { document.body.classList.remove("tt-open"); el("ttPanel").hidden = true; };
+el("ttDay").onchange = (event) => event.target.value && setTravelDay(event.target.value);
+el("ttPrev").onclick = () => setTravelDay(shiftDay(ttState.day, -1));
+el("ttNext").onclick = () => setTravelDay(shiftDay(ttState.day, 1));
+el("ttToday").onclick = () => setTravelDay(montevideoToday());
+el("ttRefresh").onclick = () => loadTravelTimes(true);
+el("ttFrom").onchange = renderTravelTimes;
+el("ttTo").onchange = (event) => { ttState.toUser = event.target.value; renderTravelTimes(); };
+el("ttHeader").checked = false;
+el("ttCopy").onclick = async () => {
+  const text = ttTableText();
+  if (!text) return flashMessage("No hay datos para copiar", false);
+  const ok = await copyText(text);
+  flashMessage(ok ? `Tabla copiada (${text.split("\n").length} filas)` : "No se pudo copiar", ok);
+};
 
 // Icons in static markup, and panel collapse
 document.querySelectorAll("[data-icon]").forEach((node) => { node.innerHTML = icon(node.dataset.icon, Number(node.dataset.size) || 18); });
