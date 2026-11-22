@@ -225,16 +225,6 @@
     </section>
 
     <section class="card">
-      <div class="card-title"><span class="ti" data-icon="cctv" data-size="16"></span>Google My Maps</div>
-      <div class="status" id="kmlStatus">Sin datos</div>
-      <div class="row">
-        <button class="btn" id="refreshKml"><span data-icon="refresh-cw" data-size="16"></span>Actualizar</button>
-        <select id="kmlInterval" title="Actualización automática"></select>
-      </div>
-      <div id="kmlLayers" class="mt"></div>
-    </section>
-
-    <section class="card">
       <div class="card-title"><span class="ti" data-icon="siren" data-size="16"></span>Waze</div>
       <div class="status" id="wazeStatus">Sin datos</div>
       <div class="row">
@@ -272,6 +262,11 @@
       </div>
       <div class="hint">Los navegadores bloquean (CORS) estas URLs. Se intenta directo, luego su proxy, luego proxies públicos. Un proxy propio es lo más seguro: la URL de Waze incluye su token.</div>
     </details>
+
+    <section class="card">
+      <button class="btn secondary" id="refreshKml" style="width:100%"><span data-icon="cctv" data-size="16"></span>Actualizar My Maps</button>
+      <div class="status" id="kmlStatus" style="margin:8px 0 0">Sin datos</div>
+    </section>
   </aside>
   <button class="icon-btn" id="bellBtn" title="Alertas"><span data-icon="bell" data-size="22"></span><span class="dot" id="bellBadge" hidden>0</span></button>
   <aside id="drawer">
@@ -383,7 +378,7 @@ const defaultLayerColor = (layerId) => (layerId.startsWith("kml:") ? DEFAULT_CAM
 const STORAGE_KEY = "mapa-cctv-waze-v1";
 function loadSettings() {
   const fresh = { sources: { ...DEFAULT_SOURCES }, layers: {}, hiddenAlertTypes: [], baseMap: "OpenStreetMap",
-                  kmlInterval: "60", wazeInterval: "60", view: null, maxAgeHours: 0, minReliability: 0,
+                  wazeInterval: "60", view: null, maxAgeHours: 0, minReliability: 0,
                   showSource: { kml: true, waze: true }, showBuses: { all: false, camera: false }, watch: { accident: true, stopped: true }, notifySound: false, notifyBrowser: false, historySeeded: false };
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
@@ -396,7 +391,9 @@ settings.showBuses = { all: false, camera: false };   // buses always start off:
 function saveSettings() {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(settings)); } catch (error) { /* ignore */ }
 }
+const KML_LAYER_DEFAULTS = { visible: true, color: null, size: 5 };
 function layerSetting(layerId) {
+  if (layerId.startsWith("kml:")) return KML_LAYER_DEFAULTS;   // no per-layer controls for My Maps
   return settings.layers[layerId] || (settings.layers[layerId] = { visible: true, color: null, size: layerId.startsWith("kml:") ? 5 : 8 });
 }
 
@@ -716,7 +713,6 @@ function buildAlertTypePanel() {
 function refreshPanels() {
   el("countKml").textContent = featuresBySource.kml.filter((f) => f.kind === "point").length;
   el("countWaze").textContent = featuresBySource.waze.length;
-  buildLayerPanel("kmlLayers", "kml");
   buildLayerPanel("wazeLayers", "waze");
   buildAlertTypePanel();
   render();
@@ -775,7 +771,6 @@ function scheduleRefresh(key, seconds, task) {
 function fillSelect(select, options, current) {
   select.innerHTML = options.map(([value, label]) => `<option value="${escapeHtml(value)}" ${value === current ? "selected" : ""}>${escapeHtml(label)}</option>`).join("");
 }
-fillSelect(el("kmlInterval"), INTERVAL_OPTIONS, settings.kmlInterval);
 fillSelect(el("wazeInterval"), INTERVAL_OPTIONS, settings.wazeInterval);
 if (!BASE_MAPS[settings.baseMap]) settings.baseMap = "OpenStreetMap";
 fillSelect(el("baseMap"), Object.keys(BASE_MAPS).map((n) => [n, n]), settings.baseMap);
@@ -792,7 +787,6 @@ el("baseMap").onchange = (e) => setBaseMap(e.target.value);
 el("searchBox").oninput = () => render();
 el("refreshKml").onclick = loadKml;
 el("refreshWaze").onclick = loadWaze;
-el("kmlInterval").onchange = (e) => { settings.kmlInterval = e.target.value; saveSettings(); scheduleRefresh("kml", e.target.value, loadKml); };
 el("wazeInterval").onchange = (e) => { settings.wazeInterval = e.target.value; saveSettings(); scheduleRefresh("waze", e.target.value, loadWaze); };
 el("fitBtn").onclick = fitToData;
 el("saveSources").onclick = () => {
@@ -1333,7 +1327,6 @@ renderDrawer();
 setBaseMap(settings.baseMap);
 if (settings.view) { map.setView([settings.view[0], settings.view[1]], settings.view[2]); hasFitted = true; }
 loadKml(); loadWaze();
-scheduleRefresh("kml", settings.kmlInterval, loadKml);
 scheduleRefresh("waze", settings.wazeInterval, loadWaze);
 </script>
 </body>
